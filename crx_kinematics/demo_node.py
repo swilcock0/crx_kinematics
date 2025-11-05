@@ -244,17 +244,17 @@ class CircleEvaluation:
                     type=Marker.ARROW,
                     scale=Vector3(x=0.005, y=0.02, z=0.02),
                     color=ColorRGBA(
-                        r=0.0 if np.abs(dot) < 0.1 else 1.0,
-                        g=1.0 if np.abs(dot) < 0.1 else 0.0,
+                        r=0.0 if close_to_zero else 1.0,
+                        g=1.0 if close_to_zero else 0.0,
                         b=0.0,
                         a=0.5,
                     ),
                     points=[numpy_to_point(start), numpy_to_point(end)],
                 )
-                for start, end, dot in [
-                    (self.O4 + self.Z5fulllength, self.O4, 0.0),
-                    (self.O3UP, self.O4, self.dot_product_up),
-                    (self.O3DOWN, self.O4, self.dot_product_down),
+                for start, end, close_to_zero in [
+                    (self.O4 + self.Z5fulllength, self.O4, False),
+                    (self.O3UP, self.O4, np.abs(self.dot_product_up) < 0.1),
+                    (self.O3DOWN, self.O4, np.abs(self.dot_product_down) < 0.1),
                 ]
             ]
         )
@@ -404,7 +404,7 @@ class DemoNode(Node):
         ### IK ###
 
         T_R0_tool, O6, O5, circle_evaluations, sample_signal_up, sample_signal_down, zeros = (
-            self.robot.ik([80.321, 287.676, 394.356, -131.819, -45.268, 61.453])
+            self.robot.ik(xyzwpr)  # [80.321, 287.676, 394.356, -131.819, -45.268, 61.453])
         )
 
         i = 360 * (time.time() % 4) / 4
