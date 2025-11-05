@@ -1,17 +1,21 @@
+import io
 from typing import Union, List
 from dataclasses import dataclass
 import time
 import numpy as np
+import matplotlib.pyplot as plt
 import rclpy
 import rclpy.logging
 from rclpy.node import Node
 from rclpy.executors import ExternalShutdownException
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 import tf_transformations as tr
+from cv_bridge import CvBridge
 
 from geometry_msgs.msg import TransformStamped, Transform, Vector3, Quaternion, Point, Pose
 from std_msgs.msg import Header, ColorRGBA
 from tf2_msgs.msg import TFMessage
+from sensor_msgs.msg import Image
 from visualization_msgs.msg import Marker, MarkerArray
 
 
@@ -97,6 +101,10 @@ def isometry_inv(T):
     T_inv[:3, 3] = t_inv
 
     return T_inv
+
+
+def normalized(arr):
+    return arr / np.linalg.norm(arr)
 
 
 def vector_projection(a, b):
@@ -202,6 +210,13 @@ class CircleEvaluation:
         self.O3UP = self.T_R0_plane[:3, :3] @ [*O3UP, 0]
         self.O3DOWN = self.T_R0_plane[:3, :3] @ [*O3DOWN, 0]
 
+        self.Z5fulllength = O5 - self.O4
+        self.Z5 = normalized(self.Z5fulllength)
+        self.Z4UP = normalized(self.O4 - self.O3UP)
+        self.Z4DOWN = normalized(self.O4 - self.O3DOWN)
+        self.dot_product_up = self.Z4UP @ self.Z5
+        self.dot_product_down = self.Z4DOWN @ self.Z5
+
     def markers(self, frame_id="R0"):
         markers = [
             Marker(
@@ -221,6 +236,28 @@ class CircleEvaluation:
                 color=ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.5),
             ),
         ]
+        markers.extend(
+            [
+                Marker(
+                    header=Header(frame_id=frame_id),
+                    ns="Z4Z5_arrows",
+                    type=Marker.ARROW,
+                    scale=Vector3(x=0.005, y=0.02, z=0.02),
+                    color=ColorRGBA(
+                        r=0.0 if np.abs(dot) < 0.1 else 1.0,
+                        g=1.0 if np.abs(dot) < 0.1 else 0.0,
+                        b=0.0,
+                        a=0.5,
+                    ),
+                    points=[numpy_to_point(start), numpy_to_point(end)],
+                )
+                for start, end, dot in [
+                    (self.O4 + self.Z5fulllength, self.O4, 0.0),
+                    (self.O3UP, self.O4, self.dot_product_up),
+                    (self.O3DOWN, self.O4, self.dot_product_down),
+                ]
+            ]
+        )
         markers.extend(
             [
                 Marker(
@@ -322,6 +359,7 @@ class DemoNode(Node):
 
         self.tf_broadcaster = ReBroadcastableStaticTransformBroadcaster(self)
         self.marker_publisher = self.create_publisher(MarkerArray, "markers", 10)
+        self.plot_image_publisher = self.create_publisher(Image, "plot_img", 10)
 
         self.subscription = self.create_timer(0.1, self.timer_cb)
 
@@ -354,13 +392,41 @@ class DemoNode(Node):
 
         ### IK ###
 
-        O0 = np.zeros(3)
         T_R0_tool, O6, O5, circle_evaluations = self.robot.ik(
             [80.321, 287.676, 394.356, -131.819, -45.268, 61.453]
         )
 
         i = 360 * (time.time() % 4) / 4
         ce = circle_evaluations[int(i)]
+
+        sample_signal_up, sample_signal_down = zip(
+            *[(ce.dot_product_up, ce.dot_product_down) for ce in circle_evaluations]
+        )
+
+        fig, ax = plt.subplots()
+        x = np.linspace(0, 2 * np.pi, 360)
+        ax.plot(x, sample_signal_up, color="r", label="Z5Z4UP")
+        ax.plot(x, sample_signal_down, color="b", label="Z5Z4DOWN")
+        ax.axhline(y=0.0, color="black", linestyle="-")
+        ax.axvline(x=np.radians(i), color="black", linestyle="-")
+        ax.set_title("Figure 7: Sample signal dot products")
+        ax.legend()
+        fig.canvas.draw()
+
+        io_buf = io.BytesIO()
+        fig.savefig(io_buf, format="raw")
+        io_buf.seek(0)
+        image_array = np.reshape(
+            np.frombuffer(io_buf.getvalue(), dtype=np.uint8),
+            shape=(int(fig.bbox.bounds[3]), int(fig.bbox.bounds[2]), -1),
+        )
+        io_buf.close()
+        plt.close(fig)
+
+        self.plot_image_publisher.publish(CvBridge().cv2_to_imgmsg(image_array))
+
+        self.get_logger().info(f"{ce.dot_product_up=}")
+        self.get_logger().info(f"{ce.dot_product_down=}")
 
         transforms.extend(
             [
