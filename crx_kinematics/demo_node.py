@@ -427,7 +427,7 @@ class DemoNode(Node):
         io_buf.seek(0)
         image_array = np.reshape(
             np.frombuffer(io_buf.getvalue(), dtype=np.uint8),
-            shape=(int(fig.bbox.bounds[3]), int(fig.bbox.bounds[2]), -1),
+            newshape=(int(fig.bbox.bounds[3]), int(fig.bbox.bounds[2]), -1),
         )
         io_buf.close()
         plt.close(fig)
@@ -501,12 +501,18 @@ class DemoNode(Node):
 
 
 def main(args=None):
+    rclpy.init(args=args)
+    node = DemoNode()
     try:
-        with rclpy.init(args=args):
-            node = DemoNode()
-            rclpy.spin(node)
+        rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    # try:
+    #     with rclpy.init(args=args):
+    #         node = DemoNode()
+    #         rclpy.spin(node)
+    # except (KeyboardInterrupt, ExternalShutdownException):
+    #     pass
 
 
 if __name__ == "__main__":
