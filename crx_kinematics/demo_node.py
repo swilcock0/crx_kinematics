@@ -74,16 +74,19 @@ class CircleEvaluation:
     def determine_joint_values(self, dh_params, O5, O6, fk, T_R0_tool, is_up):
         J1 = np.atan2(self.O4[1], self.O4[0])
 
-        R_L1_L0 = dh_params[0].T(J1)[:3, :3].T
-        O_1_3 = R_L1_L0 @ self.O3UP
+        T_L1_L0 = isometry_inv(dh_params[0].T(J1))
+        R_L1_L0 = T_L1_L0[:3, :3]
+        O_1_3 = R_L1_L0 @ (self.O3UP if is_up else self.O3DOWN)
         J2 = -np.atan2(O_1_3[2], O_1_3[0]) + np.pi / 2
 
         O_1_4 = R_L1_L0 @ self.O4
         J3 = np.atan2(O_1_4[2] - O_1_3[2], O_1_4[0] - O_1_3[0])
 
         O_1_5 = R_L1_L0 @ O5
-        O4O5_dir = O_1_5 - O_1_4
-        J4 = np.atan2(O4O5_dir[2], -O4O5_dir[1])
+        T_L2_L1 = isometry_inv(dh_params[1].T(J2))
+        T_L3_L2 = isometry_inv(dh_params[2].T(J3 + J2))  # Account for "Fanuc pecularity"
+        O4O5_dir = T_L3_L2[:3, :3] @ T_L2_L1[:3, :3] @ (O_1_5 - O_1_4)  # Expressed in R3
+        J4 = np.atan2(O4O5_dir[0], O4O5_dir[2])
 
         T_R0_L4 = fk([np.degrees(j) for j in [J1, J2, J3, J4, 0, 0]], up_to=4)
 
@@ -222,8 +225,15 @@ class DemoNode(Node):
         self.plot_image_publisher = self.create_publisher(Image, "plot_img", 10)
 
         self.subscription = self.create_timer(0.1, self.timer_cb)
+
         self.paused = False
         self.create_service(Empty, "pause_resume", self.pause_resume_cb)
+        self.sol_idx = 0
+        self.create_service(Empty, "next_sol", self.next_sol_cb)
+
+    def next_sol_cb(self, _, response):
+        self.sol_idx = self.sol_idx + 1
+        return response
 
     def pause_resume_cb(self, _, response):
         self.paused = not self.paused
@@ -255,11 +265,13 @@ class DemoNode(Node):
             down_zeros,
             ik_sols,
         ) = self.robot.ik(T_R0_tool)
-        ik_sol = ik_sols[1]
-        self.get_logger().info(f" IK={[float(round(x, 3)) for x in ik_sol]}")
-
         i = 360 * (0 if self.paused else time.time() % 10) / 10
         ce = circle_evaluations[int(i)]
+
+        zeros_distances_from_current = [abs(idx - i) for idx in up_zeros + down_zeros]
+        # ik_sol = ik_sols[np.argmin(zeros_distances_from_current)]
+        ik_sol = ik_sols[self.sol_idx % len(up_zeros + down_zeros)]
+        self.get_logger().info(f" IK={[float(round(x, 3)) for x in ik_sol]}")
 
         _, T_listsol = self.robot.fk(ik_sol, return_individual_transforms=True)
 
