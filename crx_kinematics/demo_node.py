@@ -71,7 +71,7 @@ class CircleEvaluation:
         self.dot_product_up = self.Z4UP @ self.Z5
         self.dot_product_down = self.Z4DOWN @ self.Z5
 
-    def determine_joint_values(self, dh_params, O5, O6, fk, T_R0_tool, is_up):
+    def determine_joint_values(self, dh_params, O5, O6, T_R0_tool, is_up):
         J1 = np.atan2(self.O4[1], self.O4[0])
 
         T_L1_L0 = isometry_inv(dh_params[0].T(J1))
@@ -82,20 +82,19 @@ class CircleEvaluation:
         O_1_4 = R_L1_L0 @ self.O4
         J3 = np.atan2(O_1_4[2] - O_1_3[2], O_1_4[0] - O_1_3[0])
 
-        O_1_5 = R_L1_L0 @ O5
         T_L2_L1 = isometry_inv(dh_params[1].T(J2))
         T_L3_L2 = isometry_inv(dh_params[2].T(J3 + J2))  # Account for "Fanuc pecularity"
-        O4O5_dir = T_L3_L2[:3, :3] @ T_L2_L1[:3, :3] @ (O_1_5 - O_1_4)  # Expressed in R3
-        J4 = np.atan2(O4O5_dir[0], O4O5_dir[2])
+        T_L3_L0 = T_L3_L2 @ T_L2_L1 @ T_L1_L0
+        O_3_5 = T_L3_L0 @ [*O5, 1.0]
+        J4 = np.atan2(O_3_5[0], O_3_5[2])
 
-        T_R0_L4 = fk([np.degrees(j) for j in [J1, J2, J3, J4, 0, 0]], up_to=4)
-
-        O_4_6 = isometry_inv(T_R0_L4) @ [*O6, 1.0]
+        T_L4_L3 = isometry_inv(dh_params[3].T(J4))
+        T_L4_L0 = T_L4_L3 @ T_L3_L0
+        O_4_6 = T_L4_L0 @ [*O6, 1.0]
         J5 = np.atan2(O_4_6[0], -O_4_6[2])
 
-        T_R0_L5 = T_R0_L4 @ dh_params[4].T(J5)
-        T_L5_tool = isometry_inv(T_R0_L5) @ T_R0_tool
-
+        T_L5_L0 = isometry_inv(dh_params[4].T(J5)) @ T_L4_L0
+        T_L5_tool = T_L5_L0 @ T_R0_tool
         J6 = np.atan2(-T_L5_tool[2, 0], T_L5_tool[0, 0])
 
         solution = [np.degrees(J) for J in [J1, J2, J3, J4, J5, J6]]
@@ -195,15 +194,17 @@ class CRXRobot:
             if np.sign(sample_signal_up[i - 1]) != np.sign(sample_signal_up[i]):
                 up_zeros.append(i)
 
-        # Step 6
+        # Step 6: Position O4 and O3, determine joint values geometrically
         ik_sols = [
             circle_evaluations[zero_idx].determine_joint_values(
-                self.dh_params, O5, O6, self.fk, T_R0_tool, is_up
+                self.dh_params, O5, O6, T_R0_tool, is_up
             )
             for zero_idx, is_up in zip(
                 up_zeros + down_zeros, [True] * len(up_zeros) + [False] * len(down_zeros)
             )
         ]
+
+        # Step 7: Calculate dual solutions for each of the above IK solutions
 
         return (
             circle_evaluations,
