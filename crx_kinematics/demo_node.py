@@ -181,25 +181,25 @@ class CRXRobot:
         #  - Calculate the dot products Z4Z5 for UP and DOWN
 
         # Step 4: Calculate the sample functions (dot_product_up, dot_product_down)
-        sample_signal_up, sample_signal_down = zip(
-            *[(ce.dot_product_up, ce.dot_product_down) for ce in circle_evaluations]
+        sample_signal_up, sample_signal_down, sample_signal_x = zip(
+            *[(ce.dot_product_up, ce.dot_product_down, ce.q) for ce in circle_evaluations]
         )
 
         # Step 5: Find the Ns zeros of the sample functions
-        up_zeros = []
-        down_zeros = []
-        for i in range(1, len(sample_signal_down)):
-            if np.sign(sample_signal_down[i - 1]) != np.sign(sample_signal_down[i]):
-                down_zeros.append(i)
-            if np.sign(sample_signal_up[i - 1]) != np.sign(sample_signal_up[i]):
-                up_zeros.append(i)
+        def sample_fn_eval(q, is_up):
+            ce = CircleEvaluation(q, T_R0_tool, self.dh_params, O5)
+            return ce.dot_product_up if is_up else ce.dot_product_down
+
+        up_zeros, down_zeros = find_zeros(
+            sample_signal_up, sample_signal_down, sample_signal_x, fn=sample_fn_eval
+        )
 
         # Step 6: Position O4 and O3, determine joint values geometrically
         ik_sols = [
-            circle_evaluations[zero_idx].determine_joint_values(
+            CircleEvaluation(root, T_R0_tool, self.dh_params, O5).determine_joint_values(
                 self.dh_params, O5, O6, T_R0_tool, is_up
             )
-            for zero_idx, is_up in zip(
+            for root, is_up in zip(
                 up_zeros + down_zeros, [True] * len(up_zeros) + [False] * len(down_zeros)
             )
         ]
@@ -269,7 +269,7 @@ class DemoNode(Node):
         i = 360 * (0 if self.paused else time.time() % 10) / 10
         ce = circle_evaluations[int(i)]
 
-        zeros_distances_from_current = [abs(idx - i) for idx in up_zeros + down_zeros]
+        zeros_distances_from_current = [abs(q - ce.q) for q in up_zeros + down_zeros]
         # ik_sol = ik_sols[np.argmin(zeros_distances_from_current)]
         ik_sol = ik_sols[self.sol_idx % len(up_zeros + down_zeros)]
         self.get_logger().info(f" IK={[float(round(x, 3)) for x in ik_sol]}")

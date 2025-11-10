@@ -1,4 +1,5 @@
 import numpy as np
+import scipy
 
 
 def isometry_inv(T):
@@ -84,3 +85,27 @@ def find_third_triangle_corner(AB, AC, BC):
         y = np.sqrt(AC_squared - x_squared)
 
     return np.array([x, y]), np.array([x, -y])
+
+
+def find_zeros(sample_signal_up, sample_signal_down, sample_signal_x, fn):
+    """
+    Step 5 of Abbes and Poisson (2024).
+    Given sampled dot products (e.g. Figure 7), find accurately the roots."""
+    up_zeros = []
+    down_zeros = []
+    for i in range(1, len(sample_signal_down)):
+        if np.sign(sample_signal_up[i - 1]) != np.sign(sample_signal_up[i]):
+            x0 = sample_signal_x[i - 1]
+            x1 = sample_signal_x[i]
+            root = scipy.optimize.root_scalar(lambda q: fn(q, is_up=True), bracket=(x0, x1)).root
+            up_zeros.append(root)
+        if np.sign(sample_signal_down[i - 1]) != np.sign(sample_signal_down[i]):
+            x0 = sample_signal_x[i - 1]
+            x1 = sample_signal_x[i]
+            root = scipy.optimize.root_scalar(lambda q: fn(q, is_up=False), bracket=(x0, x1)).root
+            down_zeros.append(root)
+
+    return up_zeros, down_zeros
+
+
+# determine_joint_angles(O3, O4, O5, T_R0_tool, fk):

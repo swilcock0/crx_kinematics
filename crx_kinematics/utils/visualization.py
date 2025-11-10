@@ -154,7 +154,7 @@ def make_plot_img(sample_signal_up, sample_signal_down, zeros, circle_evaluation
     ax.axhline(y=0.0, color="black", linestyle="-")
     ax.axvline(x=np.radians(i), color="black", linestyle="-")
     for z in zeros:
-        ax.axvline(x=circle_evaluations[z].q, color="black", linestyle="--")
+        ax.axvline(x=z, color="black", linestyle="--")
     ax.set_title("Figure 7: Sample signal dot products")
     ax.legend()
     fig.canvas.draw()
