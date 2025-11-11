@@ -39,6 +39,7 @@ def create_transforms(T_list, T_listsol, T_R0_tool, T_R0_plane, frame_names, sta
 
     transforms.append(make_tfstamped("R0", "desired_pose", T_R0_tool))
     transforms.append(make_tfstamped("R0", "plane", T_R0_plane))
+    transforms.append(make_tfstamped("base_link", "R0", tr.translation_matrix([0, 0, 0.245])))
 
     return transforms
 
@@ -170,3 +171,29 @@ def make_plot_img(sample_signal_up, sample_signal_down, zeros, circle_evaluation
     plt.close(fig)
 
     return image_array
+
+
+def add_robot_joint_markers(marker_array):
+    marker_array.markers.append(
+        Marker(
+            header=Header(frame_id="base_link"),
+            ns="robot_markers",
+            id=len(marker_array.markers),
+            type=Marker.MESH_RESOURCE,
+            mesh_resource=f"package://crx_description/meshes/crx10ia/visual/link_base.stl",
+            scale=Vector3(x=0.001, y=0.001, z=0.001),
+            color=ColorRGBA(r=1.0, g=1.0, b=1.0, a=0.5),
+        )
+    )
+    for i in range(1, 7):
+        marker_array.markers.append(
+            Marker(
+                header=Header(frame_id=f"L{i}"),
+                ns="robot_markers",
+                id=len(marker_array.markers),
+                type=Marker.MESH_RESOURCE,
+                mesh_resource=f"package://crx_description/meshes/crx10ia/visual_new/link_{i}.stl",
+                scale=Vector3(x=1.0, y=1.0, z=1.0),
+                color=ColorRGBA(r=1.0, g=1.0, b=1.0, a=0.5),
+            )
+        )
