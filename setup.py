@@ -13,6 +13,7 @@ setup(
         ("share/" + package_name, ["package.xml"]),
         ("share/" + package_name + "/launch", ["launch/demo.launch.py"]),
         (f"share/{package_name}/config", glob("config/*")),
+        (f"share/{package_name}/meshes/crx10ia/visual", glob("meshes/crx10ia/visual/*")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,
