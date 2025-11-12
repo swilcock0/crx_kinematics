@@ -2,6 +2,7 @@ import numpy as np
 
 from crx_kinematics.demo_node import from_xyzwpr, to_xyzwpr
 from crx_kinematics.robot import CRXRobot
+from crx_kinematics.utils.geometry import get_dual_ik_solution, harmonize_towards_zero
 
 
 def assert_allclose(a, b, atol=1e-3, err_msg=""):
@@ -21,6 +22,24 @@ def test_fk():
     assert_allclose(xyzwpr, [80.321, 287.676, 394.356, -131.819, -45.268, 61.453])
 
 
+def test_dual_of_dual_is_original():
+    joint_values = [+78, -41, +17, -42, -60, +10]
+    dual = get_dual_ik_solution(joint_values)
+    dual_of_dual = get_dual_ik_solution(dual)
+
+    assert_allclose(joint_values, harmonize_towards_zero(dual_of_dual))
+
+
+def assert_xyzwpr_close(xyzwpr, expected):
+    # Some WPR angles are +-180. Such solutions are identical, but leads to a large diff.
+    # Therefore, harmonize all such angles to positive 180 if applicable
+    for i in range(3, 6):
+        xyzwpr[i] = xyzwpr[i] + 360 if np.isclose(xyzwpr[i], -180, atol=1e-2) else xyzwpr[i]
+        expected[i] = expected[i] + 360 if np.isclose(expected[i], -180, atol=1e-2) else expected[i]
+
+    assert_allclose(xyzwpr, expected)
+
+
 def assert_ik_solutions(xyzwpr, expected_solutions):
     robot = CRXRobot()
 
@@ -28,37 +47,31 @@ def assert_ik_solutions(xyzwpr, expected_solutions):
 
     ik_sols, _ = robot.ik(T_R0_tool)
 
-    assert len(ik_sols) == len(expected_solutions) / 2  # TODO: Implement Step 7, use full length
+    assert len(ik_sols) == len(expected_solutions)
 
-    associated_expected_idxs = [
-        np.argmin(np.sum(np.abs(np.subtract(expected_solutions, sol)[:, :3]), axis=1))
-        for sol in ik_sols
-    ]
+    # Some solutions and expected solutions have J1, J4 or J5 at +-180 degrees.
+    # Such solutions are identical, although leads to a large joint displacement diff.
+    # Therefore, harmonize all J1 and J4 values to positive 180 if applicable
+    for solution_list in [ik_sols, expected_solutions]:
+        for sol in solution_list:
+            for idx in [0, 3, 4]:
+                sol[idx] = sol[idx] + 360 if np.isclose(sol[idx], -180, atol=1e-2) else sol[idx]
 
-    assert len(associated_expected_idxs) == len(set(associated_expected_idxs))
-
-    def harmonized_diff(solution, expected):
-        "Some angles in the Tables of expected values (or WPRs) have +180 where -180 produces the same result"
-        diff = np.abs(np.subtract(solution, expected))
-        return np.array([x - 360 if np.isclose(x, 360, atol=0.1) else x for x in diff])
-
-    for solution, expected_idx in zip(ik_sols, associated_expected_idxs):
-        diff = harmonized_diff(solution, expected_solutions[expected_idx])
-        assert_allclose(
-            diff,
-            np.zeros(6),
-            atol=1e-2,
-            err_msg=f"\n{ik_sols} vs\n{expected_solutions[expected_idx]}. \ndiff={diff}",
-        )
+    for solution in ik_sols:
+        diffs = [np.sum(np.abs(np.subtract(expected, solution))) for expected in expected_solutions]
+        expected_idx = np.argmin(diffs)
+        expected = expected_solutions[expected_idx]
+        assert_allclose(np.round(solution, 3).tolist(), expected, atol=1e-2)
+        expected_solutions.pop(expected_idx)  # Don't let another solution claim the same expected
 
     # Check that FK on each solution brings us back to where we started
     T_R0_tool_list = [robot.fk(solution) for solution in ik_sols]
     for T in T_R0_tool_list:
         assert_allclose(T, T_R0_tool)
 
+    # Do the same for their corresponding XYZWPR, for good measure
     for xyzwpr_sol in [to_xyzwpr(T) for T in T_R0_tool_list]:
-        diff = harmonized_diff(xyzwpr_sol, xyzwpr)
-        assert_allclose(diff, np.zeros(6), err_msg=f"\n{xyzwpr_sol} vs\n{xyzwpr}. \ndiff={diff}")
+        assert_xyzwpr_close(xyzwpr_sol, xyzwpr)
 
 
 def test_ik_example_3_1():
@@ -72,20 +85,20 @@ def test_ik_example_3_1():
         [78, -41, 17, -42, -60, 10],
         [-135.389, -89.087, 70.807, -85.297, 121.416, 121.782],
         [-144.839, -88.468, 39.850, 71.154, -111.920, -91.804],
-        [-150.538, 39.473, 188.392, -62.318, 85.679, -119.224],
+        [-150.538, 39.473, 188.392 - 360, -62.318, 85.679, -119.224],
         [-102, 41, 163, 138, -60, 10],
     ]
+    # NOTE: "188.392" is the only occurrence in the paper of a value not harmonized towards zero [-180, 180].
+    # We harmonize it to make it consistent, and to make the test pass!
 
     assert_ik_solutions(xyzwpr, expected_solutions)
 
 
 def test_ik_example_3_2():
-    xyzwpr = [600, 0, 100, -180, 0, 70]
-    robot = CRXRobot()
+    xyzwpr = [600, 0, 100, 180, 0, 70]
 
     # Table 5
     expected_solutions = [  # 12 solutions
-        # Note: +180 OR -180 on J4 leads to same pose! Hence we need the "harmonized_diff" fn above
         [-14.478, 119.780, 78.001, -180, 168.001, -95.522],
         [-6.336, 121.233, 89.999, -116.197, 179.999, -39.861],
         [6.335, 121.233, 90, -63.811, 179.999, -0.146],
@@ -103,7 +116,7 @@ def test_ik_example_3_2():
     assert_ik_solutions(xyzwpr, expected_solutions)
 
 
-def test_example_3_3():
+def test_ik_example_3_3():
     xyzwpr = [209.470, -42.894, 685.496, -95.378, -64.226, -56.402]
 
     # Table 6
