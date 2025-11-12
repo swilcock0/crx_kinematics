@@ -1,13 +1,14 @@
 import io
 
 import matplotlib.pyplot as plt
+import numpy as np
 import tf_transformations as tr
 
 from geometry_msgs.msg import Point, Pose, Quaternion, Transform, TransformStamped, Vector3
 from std_msgs.msg import ColorRGBA, Header
 from visualization_msgs.msg import Marker, MarkerArray
 
-from crx_kinematics.utils.geometry import *
+from crx_kinematics.robot import IKDebugData
 
 
 def create_transforms(T_list, T_listsol, T_R0_tool, T_R0_plane, frame_names, stamp):
@@ -146,15 +147,14 @@ def numpy_to_point(arr):
     return Point(x=arr[0], y=arr[1], z=arr[2])
 
 
-def make_plot_img(sample_signal_up, sample_signal_down, zeros, circle_evaluations, i):
-
+def make_plot_img(debug_data: IKDebugData, i):
     fig, ax = plt.subplots()
     x = np.linspace(0, 2 * np.pi, 360)
-    ax.plot(x, sample_signal_up, color="r", label="Z5Z4UP")
-    ax.plot(x, sample_signal_down, color="b", label="Z5Z4DOWN")
+    ax.plot(x, debug_data.sample_signal_up, color="r", label="Z5Z4UP")
+    ax.plot(x, debug_data.sample_signal_down, color="b", label="Z5Z4DOWN")
     ax.axhline(y=0.0, color="black", linestyle="-")
     ax.axvline(x=np.radians(i), color="black", linestyle="-")
-    for z in zeros:
+    for z in debug_data.up_zeros + debug_data.down_zeros:
         ax.axvline(x=z, color="black", linestyle="--")
     ax.set_title("Figure 7: Sample signal dot products")
     ax.legend()

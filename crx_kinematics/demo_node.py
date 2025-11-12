@@ -1,11 +1,9 @@
-from dataclasses import dataclass
 import time
 
 from cv_bridge import CvBridge
 import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
-import rclpy.logging
 from rclpy.node import Node
 from tf2_ros.transform_broadcaster import TransformBroadcaster
 import tf_transformations as tr
@@ -15,7 +13,6 @@ from std_srvs.srv import Empty
 from visualization_msgs.msg import MarkerArray
 
 from crx_kinematics.robot import CRXRobot
-from crx_kinematics.utils.geometry import *
 from crx_kinematics.utils.visualization import (
     add_robot_joint_markers,
     create_marker_array,
@@ -88,38 +85,33 @@ class DemoNode(Node):
 
         ### IK ###
 
-        (
-            circle_evaluations,
-            sample_signal_up,
-            sample_signal_down,
-            up_zeros,
-            down_zeros,
-            ik_sols,
-        ) = self.robot.ik(T_R0_tool)
-        i = 360 * (0 if self.paused else time.time() % 10) / 10
-        ce = circle_evaluations[int(i)]
+        ik_sols, debug_data = self.robot.ik(T_R0_tool)
 
-        zeros_distances_from_current = [abs(q - ce.q) for q in up_zeros + down_zeros]
+        i = 360 * (0 if self.paused else time.time() % 10) / 10
+        ce = debug_data.circle_evaluations[int(i)]
+
+        zeros = debug_data.up_zeros + debug_data.down_zeros
+        zeros_distances_from_current = [abs(q - ce.q) for q in zeros]
         ik_sol = ik_sols[np.argmin(zeros_distances_from_current)]
-        # ik_sol = ik_sols[self.sol_idx % len(up_zeros + down_zeros)]
+        # ik_sol = ik_sols[self.sol_idx % len(zeros)]
         self.get_logger().info(f" IK={[float(round(x, 3)) for x in ik_sol]}")
 
         _, T_listsol = self.robot.fk(ik_sol, return_individual_transforms=True)
 
         ### Visualizations ###
 
-        marker_array = create_marker_array(ce, circle_evaluations)
+        marker_array = create_marker_array(ce, debug_data.circle_evaluations)
         add_robot_joint_markers(marker_array)
         self.marker_publisher.publish(marker_array)
+
         now = self.get_clock().now().to_msg()
         self.tf_broadcaster.sendTransform(
             create_transforms(
                 T_list, T_listsol, T_R0_tool, ce.T_R0_plane, self.robot.frame_names, now
             )
         )
-        image_array = make_plot_img(
-            sample_signal_up, sample_signal_down, up_zeros + down_zeros, circle_evaluations, i
-        )
+
+        image_array = make_plot_img(debug_data, i)
         self.plot_image_publisher.publish(CvBridge().cv2_to_imgmsg(image_array))
 
 

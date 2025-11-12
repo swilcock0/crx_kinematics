@@ -43,7 +43,9 @@ class CircleEvaluation:
         self.dot_product_up = self.Z4UP @ self.Z5
         self.dot_product_down = self.Z4DOWN @ self.Z5
 
-    def determine_joint_values(self, dh_params, O5, O6, T_R0_tool, is_up):
+    def determine_joint_values(self, dh_params, O5, T_R0_tool, is_up):
+        O6 = T_R0_tool[:3, 3]
+
         J1 = np.arctan2(self.O4[1], self.O4[0])
 
         T_L1_L0 = isometry_inv(dh_params[0].T(J1))
@@ -71,6 +73,15 @@ class CircleEvaluation:
 
         solution = [np.degrees(J) for J in [J1, J2, J3, J4, J5, J6]]
         return solution
+
+
+@dataclass
+class IKDebugData:
+    circle_evaluations: list[CircleEvaluation]
+    sample_signal_up: list[float]
+    sample_signal_down: list[float]
+    up_zeros: list[float]
+    down_zeros: list[float]
 
 
 class CRXRobot:
@@ -113,7 +124,7 @@ class CRXRobot:
     def __init__(self):
         pass
 
-    def fk(self, joint_values=None, return_individual_transforms=False, up_to=7):
+    def fk(self, joint_values=None, return_individual_transforms=False):
         # Joint values in degrees
 
         if num_values := len(joint_values) != 6:
@@ -130,7 +141,7 @@ class CRXRobot:
         T_list.append(self.T_L6_tool)
 
         T_R0_tool = T_list[0].copy()
-        for i, T in enumerate(T_list[1:up_to]):
+        for T in T_list[1:]:
             T_R0_tool = T_R0_tool @ T
 
         if return_individual_transforms:
@@ -138,7 +149,9 @@ class CRXRobot:
 
         return T_R0_tool
 
-    def ik(self, T_R0_tool):
+    IKSolution = list[float]
+
+    def ik(self, T_R0_tool) -> tuple[list[IKSolution], IKDebugData]:
         # Step 1: Positioning the centers O6 and O5 in the frame R0
         O6 = T_R0_tool[:3, 3]
         O5 = (T_R0_tool @ [0, 0, self.L6.r, 1])[:3]
@@ -169,7 +182,7 @@ class CRXRobot:
         # Step 6: Position O4 and O3, determine joint values geometrically
         ik_sols = [
             CircleEvaluation(root, T_R0_tool, self.dh_params, O5).determine_joint_values(
-                self.dh_params, O5, O6, T_R0_tool, is_up
+                self.dh_params, O5, T_R0_tool, is_up
             )
             for root, is_up in zip(
                 up_zeros + down_zeros, [True] * len(up_zeros) + [False] * len(down_zeros)
@@ -178,11 +191,12 @@ class CRXRobot:
 
         # Step 7: Calculate dual solutions for each of the above IK solutions
 
-        return (
+        debug_data = IKDebugData(
             circle_evaluations,
             sample_signal_up,
             sample_signal_down,
             up_zeros,
             down_zeros,
-            ik_sols,
         )
+
+        return ik_sols, debug_data

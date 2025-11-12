@@ -3,9 +3,9 @@ import numpy as np
 from crx_kinematics.demo_node import from_xyzwpr, to_xyzwpr
 from crx_kinematics.robot import CRXRobot
 
-assert_allclose = lambda a, b, atol=1e-3, err_msg="": np.testing.assert_allclose(
-    a, b, atol=atol, err_msg=err_msg
-)
+
+def assert_allclose(a, b, atol=1e-3, err_msg=""):
+    np.testing.assert_allclose(a, b, atol=atol, err_msg=err_msg)
 
 
 def test_fk():
@@ -26,14 +26,7 @@ def assert_ik_solutions(xyzwpr, expected_solutions):
 
     T_R0_tool = from_xyzwpr(xyzwpr)
 
-    (
-        circle_evaluations,
-        sample_signal_up,
-        sample_signal_down,
-        up_zeros,
-        down_zeros,
-        ik_sols,
-    ) = robot.ik(T_R0_tool)
+    ik_sols, _ = robot.ik(T_R0_tool)
 
     assert len(ik_sols) == len(expected_solutions) / 2  # TODO: Implement Step 7, use full length
 
