@@ -1,13 +1,12 @@
 import os
 
 from ament_index_python import get_package_share_directory as find_pkg
-from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
-
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -19,7 +18,7 @@ def generate_launch_description():
     run_rviz = LaunchConfiguration("run_rviz")
 
     demo_node = Node(
-        package="crx_kinematics",
+        package="crx_kinematics_py",
         executable="demo_node",
         name="demo_node",
         output="screen",
@@ -31,7 +30,7 @@ def generate_launch_description():
         name="rviz2",
         output="log",
         condition=IfCondition(run_rviz),
-        arguments=["-d", os.path.join(find_pkg("crx_kinematics"), "config/demo.rviz")],
+        arguments=["-d", os.path.join(find_pkg("crx_kinematics_py"), "config/demo.rviz")],
     )
 
     nodes_to_start = [demo_node, rviz_node]

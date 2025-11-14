@@ -1,8 +1,8 @@
 import numpy as np
 
-from crx_kinematics.demo_node import from_xyzwpr, to_xyzwpr
-from crx_kinematics.robot import CRXRobot
-from crx_kinematics.utils.geometry import get_dual_ik_solution, harmonize_towards_zero
+from crx_kinematics_py.demo_node import from_xyzwpr, to_xyzwpr
+from crx_kinematics_py.robot import CRXRobot
+from crx_kinematics_py.utils.geometry import get_dual_ik_solution, harmonize_towards_zero
 
 
 def assert_allclose(a, b, atol=1e-3, err_msg=""):

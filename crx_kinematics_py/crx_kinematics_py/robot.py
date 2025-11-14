@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from crx_kinematics.utils.geometry import (
+from crx_kinematics_py.utils.geometry import (
     construct_plane,
     find_third_triangle_corner,
     find_zeros,

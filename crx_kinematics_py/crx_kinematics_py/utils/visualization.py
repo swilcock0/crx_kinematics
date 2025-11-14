@@ -8,7 +8,7 @@ from geometry_msgs.msg import Point, Pose, Quaternion, Transform, TransformStamp
 from std_msgs.msg import ColorRGBA, Header
 from visualization_msgs.msg import Marker, MarkerArray
 
-from crx_kinematics.robot import IKDebugData
+from crx_kinematics_py.robot import IKDebugData
 
 
 def create_transforms(T_list, T_listsol, T_R0_tool, T_R0_plane, frame_names, stamp):
@@ -180,7 +180,7 @@ def add_robot_joint_markers(marker_array):
             ns="robot_markers",
             id=len(marker_array.markers),
             type=Marker.MESH_RESOURCE,
-            mesh_resource=f"package://crx_kinematics/meshes/crx10ia/visual/link_base.stl",
+            mesh_resource=f"package://crx_kinematics_py/meshes/crx10ia/visual/link_base.stl",
             scale=Vector3(x=0.001, y=0.001, z=0.001),
             color=ColorRGBA(r=1.0, g=1.0, b=1.0, a=0.5),
         )
@@ -192,7 +192,7 @@ def add_robot_joint_markers(marker_array):
                 ns="robot_markers",
                 id=len(marker_array.markers),
                 type=Marker.MESH_RESOURCE,
-                mesh_resource=f"package://crx_kinematics/meshes/crx10ia/visual/link_{i}.stl",
+                mesh_resource=f"package://crx_kinematics_py/meshes/crx10ia/visual/link_{i}.stl",
                 scale=Vector3(x=1.0, y=1.0, z=1.0),
                 color=ColorRGBA(r=1.0, g=1.0, b=1.0, a=0.5),
             )

@@ -2,7 +2,7 @@ from glob import glob
 
 from setuptools import find_packages, setup
 
-package_name = "crx_kinematics"
+package_name = "crx_kinematics_py"
 
 setup(
     name=package_name,
@@ -27,6 +27,6 @@ setup(
         ],
     },
     entry_points={
-        "console_scripts": ["demo_node = crx_kinematics.demo_node:main"],
+        "console_scripts": ["demo_node = crx_kinematics_py.demo_node:main"],
     },
 )

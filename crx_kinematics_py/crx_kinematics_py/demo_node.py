@@ -12,9 +12,9 @@ from sensor_msgs.msg import Image
 from std_srvs.srv import Empty, Trigger
 from visualization_msgs.msg import MarkerArray
 
-from crx_kinematics.robot import CRXRobot
-from crx_kinematics.utils.geometry import get_dual_ik_solution, harmonize_towards_zero
-from crx_kinematics.utils.visualization import (
+from crx_kinematics_py.robot import CRXRobot
+from crx_kinematics_py.utils.geometry import get_dual_ik_solution, harmonize_towards_zero
+from crx_kinematics_py.utils.visualization import (
     add_robot_joint_markers,
     create_marker_array,
     create_transforms,
