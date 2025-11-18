@@ -126,14 +126,8 @@ class CRXRobot:
     def __init__(self):
         pass
 
-    def fk(self, joint_values=None, return_individual_transforms=False):
+    def fk(self, joint_values, return_individual_transforms=False):
         # Joint values in degrees
-
-        if num_values := len(joint_values) != 6:
-            raise RuntimeError(f"Received {len(num_values)} joint values for FK, but expected 6")
-
-        if joint_values is None:
-            joint_values = [0] * 6
 
         joint_values = [np.radians(j) for j in joint_values]  # Express in radians
 
