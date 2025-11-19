@@ -20,7 +20,7 @@ class CircleEvaluation:
         r4 = dh_params[3].r
         r5 = dh_params[4].r
         r6 = dh_params[5].r
-        a3 = dh_params[2].a
+        a3 = dh_params[2].a  # Note: "a2" in the paper. See the DHParams "convenience" comment below
 
         self.O4 = (T_R0_tool @ [r5 * np.cos(q), r5 * np.sin(q), r6, 1])[:3]
         self.dist_O4 = np.linalg.norm(self.O4)
@@ -53,7 +53,7 @@ class CircleEvaluation:
         T_L1_L0 = isometry_inv(dh_params[0].T(J1))
         R_L1_L0 = T_L1_L0[:3, :3]
         O_1_3 = R_L1_L0 @ (self.O3UP if is_up else self.O3DOWN)
-        J2 = -np.arctan2(O_1_3[2], O_1_3[0]) + np.pi / 2
+        J2 = np.arctan2(O_1_3[0], O_1_3[2])
 
         O_1_4 = R_L1_L0 @ self.O4
         J3 = np.arctan2(O_1_4[2] - O_1_3[2], O_1_4[0] - O_1_3[0])
@@ -110,7 +110,8 @@ class CRXRobot:
 
     # Corresponds to each column in Table 2.
     # Note that some rows annoyingly attribute values to i-1 while some attribute to i.
-    # The below params attribute all values in each column to i.
+    # The below params attribute all values in each column to i for convenience, , although it's
+    # technically incorrect according to the modified DH convention..
     L1 = DHParams()
     L2 = DHParams(alpha=-np.pi / 2, theta=-np.pi / 2)
     L3 = DHParams(a=0.54, alpha=np.pi)

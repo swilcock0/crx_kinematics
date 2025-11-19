@@ -46,11 +46,8 @@ def vector_rejection(a, b):
 
 
 def construct_plane(dir1, dir2):
-    dir1_unit = dir1 / np.linalg.norm(dir1)
-
-    dir2_orthogonal = vector_rejection(dir2, dir1)
-    dir2_orthogonal = dir2_orthogonal / np.linalg.norm(dir2_orthogonal)
-
+    dir1_unit = normalized(dir1)
+    dir2_orthogonal = normalized(vector_rejection(dir2, dir1))
     dir3 = np.cross(dir1_unit, dir2_orthogonal)
 
     T = np.eye(4)
