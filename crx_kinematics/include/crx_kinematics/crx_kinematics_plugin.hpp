@@ -1,6 +1,6 @@
 #pragma once
 
-#include <moveit/kinematics_base/kinematics_base.hpp>
+#include <moveit/kinematics_base/kinematics_base.h>
 
 namespace crx_kinematics
 {
@@ -19,6 +19,13 @@ class CRXKinematicsPlugin : public kinematics::KinematicsBase
                                const std::vector<double>& ik_seed_state,
                                std::vector<double>& solution,
                                moveit_msgs::msg::MoveItErrorCodes& error_code,
+                               const kinematics::KinematicsQueryOptions& options =
+                                   kinematics::KinematicsQueryOptions()) const override final;
+
+    virtual bool getPositionIK(const std::vector<geometry_msgs::msg::Pose>& ik_poses,
+                               const std::vector<double>& ik_seed_state,
+                               std::vector<std::vector<double>>& solutions,
+                               kinematics::KinematicsResult& result,
                                const kinematics::KinematicsQueryOptions& options =
                                    kinematics::KinematicsQueryOptions()) const override final;
 

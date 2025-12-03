@@ -114,7 +114,7 @@ class CRXRobot:
     # technically incorrect according to the modified DH convention..
     L1 = DHParams()
     L2 = DHParams(alpha=-np.pi / 2, theta=-np.pi / 2)
-    L3 = DHParams(a=0.54, alpha=np.pi)
+    L3 = DHParams(a=0.71, alpha=np.pi)
     L4 = DHParams(alpha=-np.pi / 2, r=-0.54)
     L5 = DHParams(alpha=np.pi / 2, r=0.15)
     L6 = DHParams(alpha=-np.pi / 2, r=-0.16)

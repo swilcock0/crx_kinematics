@@ -7,6 +7,7 @@ find_package(Eigen3 REQUIRED)
 find_package(moveit_core REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(tf2_eigen REQUIRED)
 
 add_library(robot STATIC src/robot.cpp)
 target_include_directories(
@@ -23,7 +24,8 @@ target_link_libraries(
   crx_kinematics_plugin
   PUBLIC moveit_core::moveit_robot_model
   PRIVATE robot moveit_core::moveit_kinematics_base
-          moveit_core::moveit_robot_state pluginlib::pluginlib rclcpp::rclcpp)
+          moveit_core::moveit_robot_state pluginlib::pluginlib rclcpp::rclcpp
+          tf2_eigen::tf2_eigen)
 
 install(DIRECTORY include/ DESTINATION include/crx_kinematics)
 install(
