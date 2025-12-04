@@ -1,6 +1,10 @@
 #pragma once
 
 #include <moveit/kinematics_base/kinematics_base.h>
+#include <Eigen/Geometry>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.h>
+// #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 namespace crx_kinematics
 {
@@ -72,6 +76,10 @@ class CRXKinematicsPlugin : public kinematics::KinematicsBase
   private:
     std::vector<std::string> joint_names_;
     std::vector<std::string> link_names_;
+    std::string planning_frame_;
+    Eigen::Isometry3d tip_offset_ = Eigen::Isometry3d::Identity();
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 };
 
 }  // namespace crx_kinematics

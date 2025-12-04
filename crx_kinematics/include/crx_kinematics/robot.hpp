@@ -45,7 +45,6 @@ struct CircleEvaluation
                               const Eigen::Isometry3d& T_R0_tool,
                               const double r4,
                               const double r5,
-                              const double r6,
                               const double a3,
                               const Eigen::Vector3d& O5);
 

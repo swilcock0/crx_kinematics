@@ -19,7 +19,7 @@ std::array<DHParams, 6> crx_10ia_params()
 {
     DHParams L1 = {};
     DHParams L2 = { .alpha = -M_PI / 2, .theta = -M_PI / 2 };
-    DHParams L3 = { .a = 0.71, .alpha = M_PI };
+    DHParams L3 = { .a = 0.54, .alpha = M_PI };
     DHParams L4 = { .alpha = -M_PI / 2, .r = -0.54 };
     DHParams L5 = { .alpha = M_PI / 2, .r = 0.15 };
     DHParams L6 = { .alpha = -M_PI / 2, .r = -0.16 };
@@ -224,12 +224,21 @@ CircleEvaluation::CircleEvaluation(const double q,
                                    const Eigen::Isometry3d& T_R0_tool,
                                    const double r4,
                                    const double r5,
-                                   const double r6,
                                    const double a3,
                                    const Eigen::Vector3d& O5)
   : q(q)
 {
-    O4 = T_R0_tool * Eigen::Vector3d(r5 * std::cos(q), r5 * std::sin(q), r6);
+    const Eigen::Vector3d O6 = T_R0_tool.translation();
+    const Eigen::Vector3d Z_circle = (O6 - O5).normalized();
+    Eigen::Vector3d X_circle = Eigen::Vector3d::UnitZ().cross(Z_circle).normalized();
+    if (X_circle.norm() < 1e-6)
+    {
+        X_circle = Eigen::Vector3d::UnitY().cross(Z_circle).normalized();
+    }
+    const Eigen::Vector3d Y_circle = Z_circle.cross(X_circle);
+
+    O4 = O5 + r5 * (X_circle * std::cos(q) + Y_circle * std::sin(q));
+
     triangle_inequality_holds = O4.norm() <= std::abs(r4) + std::abs(a3);
 
     const Eigen::Isometry3d T_R0_plane = construct_plane(O4, Eigen::Vector3d::UnitZ());
@@ -238,8 +247,9 @@ CircleEvaluation::CircleEvaluation(const double q,
     O3UP = T_R0_plane * Eigen::Vector3d(corner_up.x(), corner_up.y(), 0.0);
     O3DOWN = T_R0_plane * Eigen::Vector3d(corner_down.x(), corner_down.y(), 0.0);
 
+    const Eigen::Vector3d Z4 = (O4 - O3UP).normalized();
     const Eigen::Vector3d Z5 = (O5 - O4).normalized();
-    dot_product_up = Eigen::Vector3d(O4 - O3UP).normalized().dot(Z5);
+    dot_product_up = Z4.dot(Z5);
     dot_product_down = Eigen::Vector3d(O4 - O3DOWN).normalized().dot(Z5);
 }
 
@@ -281,16 +291,16 @@ Eigen::Isometry3d CRXRobot::fk(const std::array<double, 6>& joint_values) const
 std::vector<std::array<double, 6>> CRXRobot::ik(const Eigen::Isometry3d& desired_pose) const
 {
     // Step 1
-    const Eigen::Vector3d O5 =
-        desired_pose /*aka T_R0_tool*/ * Eigen::Vector3d(0.0, 0.0, dh_params[5].r);
+    const Eigen::Vector3d O6 = desired_pose.translation();
+    const Eigen::Vector3d z_tool = desired_pose.linear().col(2);
+    const Eigen::Vector3d O5 = O6 + dh_params[5].r * z_tool;
 
     const double r4 = dh_params[3].r;
     const double r5 = dh_params[4].r;
-    const double r6 = dh_params[5].r;
     const double a3 = dh_params[2].a;
 
-    auto make_circle_evaluation = [&desired_pose, r4, r5, r6, a3, &O5](double q) {
-        return CircleEvaluation(q, desired_pose, r4, r5, r6, a3, O5);
+    auto make_circle_evaluation = [&desired_pose, r4, r5, a3, &O5](double q) {
+        return CircleEvaluation(q, desired_pose, r4, r5, a3, O5);
     };
 
     auto f_up = [&make_circle_evaluation](double q) {
@@ -311,7 +321,7 @@ std::vector<std::array<double, 6>> CRXRobot::ik(const Eigen::Isometry3d& desired
     for (int q_deg = 1; q_deg < 360; ++q_deg)
     {
         auto circle_evaluation = CircleEvaluation(
-            static_cast<double>(q_deg) / 180.0 * M_PI, desired_pose, r4, r5, r6, a3, O5);
+            static_cast<double>(q_deg) / 180.0 * M_PI, desired_pose, r4, r5, a3, O5);
 
         const double up_dot = circle_evaluation.dot_product_up;
         const double down_dot = circle_evaluation.dot_product_down;
@@ -323,7 +333,7 @@ std::vector<std::array<double, 6>> CRXRobot::ik(const Eigen::Isometry3d& desired
                                           f_up,
                                           previous_up_dot,
                                           up_dot);
-            const CircleEvaluation ce = CircleEvaluation(root, desired_pose, r4, r5, r6, a3, O5);
+            const CircleEvaluation ce = CircleEvaluation(root, desired_pose, r4, r5, a3, O5);
             if (ce.triangle_inequality_holds)
             {
                 solutions.push_back(
@@ -337,7 +347,7 @@ std::vector<std::array<double, 6>> CRXRobot::ik(const Eigen::Isometry3d& desired
                                           f_down,
                                           previous_down_dot,
                                           down_dot);
-            const CircleEvaluation ce = CircleEvaluation(root, desired_pose, r4, r5, r6, a3, O5);
+            const CircleEvaluation ce = CircleEvaluation(root, desired_pose, r4, r5, a3, O5);
             if (ce.triangle_inequality_holds)
             {
                 solutions.push_back(
