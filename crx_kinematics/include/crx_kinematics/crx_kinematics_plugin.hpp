@@ -4,6 +4,8 @@
 #include <Eigen/Geometry>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
+#include <visualization_msgs/msg/interactive_marker_update.hpp>
+#include <mutex>
 // #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 namespace crx_kinematics
@@ -77,9 +79,17 @@ class CRXKinematicsPlugin : public kinematics::KinematicsBase
     std::vector<std::string> joint_names_;
     std::vector<std::string> link_names_;
     std::string planning_frame_;
+    std::string robot_base_frame_;
+
     Eigen::Isometry3d tip_offset_ = Eigen::Isometry3d::Identity();
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
+    // For debugging marker discrepancies
+    rclcpp::Subscription<visualization_msgs::msg::InteractiveMarkerUpdate>::SharedPtr marker_subscriber_;
+    geometry_msgs::msg::Pose latest_marker_pose_;
+    mutable std::mutex marker_pose_mutex_;
+    void markerUpdateCallback(const visualization_msgs::msg::InteractiveMarkerUpdate::SharedPtr msg);
 };
 
 }  // namespace crx_kinematics
