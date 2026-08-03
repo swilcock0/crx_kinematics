@@ -2,15 +2,15 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>crx_kinematics</name>
-  <version>0.0.0</version>
-  <description>Forward and Inverse Kinematics for Fanuc CRX Series Cobots</description>
-  <maintainer email="cranston.daniel@gmail.com">Daniel</maintainer>
+  <version>1.0.0</version>
+  <description>C++ implementation of FK/IK for Fanuc CRX series cobots</description>
+  <maintainer email="cranston.daniel@gmail.com">Daniel Cranston</maintainer>
   <license>MIT</license>
 
   <depend>eigen</depend>
   <depend>moveit_core</depend>
   <depend>pluginlib</depend>
-  <depend>tf2_kdl</depend>
+  <depend>tf2_eigen</depend>
 
   <buildtool_depend>ament_cmake_ros</buildtool_depend>
 

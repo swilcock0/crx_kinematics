@@ -1,8 +1,6 @@
 import numpy as np
-import scipy
-import scipy
 import scipy.optimize
-from scipy.spatial.transform import Rotation
+
 
 def isometry_inv(T):
     """

@@ -1,26 +1,33 @@
 #include "crx_kinematics/crx_kinematics_plugin.hpp"
 #include "crx_kinematics/robot.hpp"
 
-#include <pluginlib/class_list_macros.hpp>
-#include <tf2_eigen/tf2_eigen.hpp>
+#include <algorithm>
+#include <cmath>
+#include <ranges>
+
+#include <Eigen/SVD>
+
+#if RCLCPP_VERSION_GTE(28, 1, 0)  // Jazzy or newer
+#include <moveit/robot_model/robot_model.hpp>
+#include <moveit/robot_state/robot_state.hpp>
+#include <moveit/collision_detection_fcl/collision_env_fcl.hpp>
+#include <moveit/collision_detection_bullet/collision_env_bullet.hpp>
+#else
 #include <moveit/robot_model/robot_model.h>
 #include <moveit/robot_state/robot_state.h>
-#include <tf2_kdl/tf2_kdl.hpp>
-#include <tf2_ros/transform_listener.h>
-#include <tf2_ros/buffer.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <Eigen/Geometry>
-// TODO: Remove conditional include when released to all active distros.
-#if __has_include(<tf2/transform_datatypes.hpp>)
-#include <tf2/transform_datatypes.hpp>
-#else
-#include <tf2/transform_datatypes.h>
+#include <moveit/collision_detection_fcl/collision_env_fcl.h>
+#include <moveit/collision_detection_bullet/collision_env_bullet.h>
 #endif
+
+#include <pluginlib/class_list_macros.hpp>
+#include <tf2_eigen/tf2_eigen.hpp>
 
 namespace crx_kinematics
 {
-// Static robot instance (one per plugin, shared across all instances)
-static std::unique_ptr<CRXRobot> g_robot = nullptr;
+namespace
+{
+auto const LOGGER = rclcpp::get_logger("crx_kinematics");
+}  // namespace
 
 bool CRXKinematicsPlugin::initialize(rclcpp::Node::SharedPtr const& node,
                                      moveit::core::RobotModel const& robot_model,
@@ -29,670 +36,679 @@ bool CRXKinematicsPlugin::initialize(rclcpp::Node::SharedPtr const& node,
                                      std::vector<std::string> const& tip_frames,
                                      double search_discretization)
 {
-    RCLCPP_INFO(kinematics::KinematicsBase::LOGGER,
-                "Initializing CRXKinematicsPlugin for group: %s", group_name.c_str());
+    storeValues(robot_model, group_name, base_frame, tip_frames, search_discretization);
 
-    // Determine the planning frame. Default to 'cylinder_stand' for now.
-    std::string planning_frame = "cylinder_stand";
-    rclcpp::Parameter planning_frame_param;
-    if (node->get_parameter("planning_frame", planning_frame_param))
+    if (tip_frames.size() != 1)
     {
-        planning_frame = planning_frame_param.as_string();
-    }
-    // Print planning frame
-    RCLCPP_INFO(kinematics::KinematicsBase::LOGGER,
-                "Using planning frame: %s", planning_frame.c_str());
-
-    // Store values, using the planning_frame as the base for the solver.
-    // The 'base_frame' from MoveIt is the robot's root link.
-    storeValues(robot_model, group_name, planning_frame, tip_frames, search_discretization);
-    
-    // Get the joint group from the robot model
-    const moveit::core::JointModelGroup* jmg = robot_model.getJointModelGroup(group_name);
-    if (!jmg)
-    {
-        RCLCPP_ERROR(kinematics::KinematicsBase::LOGGER,
-                     "Could not find joint model group: %s", group_name.c_str());
+        RCLCPP_INFO(LOGGER, "Only 1 tip frame is supported. Model has '%lu", tip_frames.size());
         return false;
     }
 
-    // Store joint names from the joint model group
-    joint_names_ = jmg->getJointModelNames();
-    
-    RCLCPP_INFO(kinematics::KinematicsBase::LOGGER,
-                "Found %lu joints", joint_names_.size());
+    jmg_ = robot_model_->getJointModelGroup(group_name);
+
+    joint_names_ = jmg_->getJointModelNames();
+    link_names_.push_back(getTipFrame());
+    RCLCPP_INFO(LOGGER, "model_name: '%s'", robot_model.getName().c_str());
+
+    RCLCPP_INFO(LOGGER, "model_frame: '%s'", robot_model.getModelFrame().c_str());
+    RCLCPP_INFO(LOGGER, "tip_frame: '%s'", getTipFrame().c_str());
+    RCLCPP_INFO(LOGGER, "base_frame: '%s'", base_frame_.c_str());
     for (const auto& name : joint_names_)
-        RCLCPP_DEBUG(kinematics::KinematicsBase::LOGGER, "  - %s", name.c_str());
-    
-    // Store link names - should include at least the tip frames
-    // For now, just store the tip frames (end-effector links)
-    if (tip_frames.empty())
     {
-        RCLCPP_WARN(kinematics::KinematicsBase::LOGGER,
-                    "No tip frames provided for group: %s - plugin may not work correctly", group_name.c_str());
-        // Don't fail, just log warning - tip frames might be added later
+        RCLCPP_DEBUG(LOGGER, "joint name: '%s'", name.c_str());
+    }
+
+    std::map<std::string, std::pair<crx_kinematics::RobotNameEnum, double>> model_map = {
+        { "crx3ia", { crx_kinematics::RobotNameEnum::crx3ia, 0.161 } },
+        { "crx5ia", { crx_kinematics::RobotNameEnum::crx5ia, 0.185 } },
+        { "crx10ia", { crx_kinematics::RobotNameEnum::crx10ia, 0.245 } },
+        { "crx10ia_l", { crx_kinematics::RobotNameEnum::crx10ia_l, 0.245 } },
+        { "crx20ia_l", { crx_kinematics::RobotNameEnum::crx20ia_l, 0.245 } },
+        { "crx30ia", { crx_kinematics::RobotNameEnum::crx30ia, 0.37 } },
+    };
+
+    if (const auto& it = model_map.find(robot_model.getName()); it != model_map.end())
+    {
+        robot_ = crx_kinematics::CRXRobot(it->second.first, /*couple_j2_j3=*/false);
+        base_j1_height_ = it->second.second;
     }
     else
     {
-        link_names_ = tip_frames;
-        
-        RCLCPP_INFO(kinematics::KinematicsBase::LOGGER,
-                    "Configured %lu tip frames", link_names_.size());
-        for (const auto& name : link_names_)
-            RCLCPP_INFO(kinematics::KinematicsBase::LOGGER, "  - %s", name.c_str());
+        RCLCPP_ERROR(LOGGER, "Unexpected model name: '%s'", robot_model.getName().c_str());
+        return false;
     }
 
-    // Initialize the robot if not already done
-    if (!g_robot)
+    tip_link_ = robot_model_->getLinkModel(getTipFrame());
+    if (tip_link_ == nullptr)
     {
-        g_robot = std::make_unique<CRXRobot>();
-        RCLCPP_INFO(kinematics::KinematicsBase::LOGGER, "CRXRobot instance created");
+        RCLCPP_ERROR(LOGGER, "Tip frame '%s' is not a link in the model", getTipFrame().c_str());
+        return false;
     }
 
-    // The plugin's base_frame_ is now the planning_frame. We need to transform
-    // from this frame to the robot's actual base frame (e.g., 'base_link').
-    robot_base_frame_ = base_frame;
-    RCLCPP_INFO(kinematics::KinematicsBase::LOGGER, "CRX plugin solver base_frame=%s, robot base_frame=%s",
-                base_frame_.c_str(), robot_base_frame_.c_str());
-
-    if (base_frame_ != robot_base_frame_)
+    if (!read_parameters(node))
     {
-        tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node->get_clock());
-        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+        return false;
     }
 
-    // Subscribe to the interactive marker topic for debugging
-    marker_subscriber_ = node->create_subscription<visualization_msgs::msg::InteractiveMarkerUpdate>(
-        "/rviz_moveit_motion_planning_display/robot_interaction_interactive_marker_topic/update",
-        10,
-        [this](const visualization_msgs::msg::InteractiveMarkerUpdate::SharedPtr msg) {
-            markerUpdateCallback(msg);
-        });
+    return extract_joint_limits_and_tcp_orientation();
+}
 
-    // Compute fixed offset from tool0 to actual tip (if different)
-    tip_offset_ = Eigen::Isometry3d::Identity();
-    if (!link_names_.empty())
+bool CRXKinematicsPlugin::initialize(rclcpp::Node::SharedPtr const& node,
+                                     moveit::core::RobotModelConstPtr robot_model,
+                                     std::string const& group_name,
+                                     std::string const& base_frame,
+                                     std::vector<std::string> const& tip_frames,
+                                     double search_discretization)
+{
+    robot_model_guard_ = robot_model;
+    return initialize(node, *robot_model, group_name, base_frame, tip_frames, search_discretization);
+}
+
+namespace
+{
+/**
+ * @brief Read a parameter from the node, declaring it if MoveIt has not already done so.
+ * declare_parameter returns the override supplied via kinematics.yaml / NodeOptions when one
+ * exists, and the default otherwise, so this works both under move_group and in unit tests.
+ */
+template <typename T>
+T get_param(const rclcpp::Node::SharedPtr& node, const std::string& name, const T& default_value)
+{
+    if (node->has_parameter(name))
     {
-        const std::string tip = link_names_.front();
-        if (tip != "flange")
+        return node->get_parameter(name).get_value<T>();
+    }
+    return node->declare_parameter<T>(name, default_value);
+}
+}  // namespace
+
+bool CRXKinematicsPlugin::read_parameters(const rclcpp::Node::SharedPtr& node)
+{
+    // MoveIt loads kinematics.yaml under this namespace.
+    const std::string prefix = "robot_description_kinematics." + group_name_ + ".";
+
+    // Flange extension: a translation along the tip frame's +Z axis, in metres. This is the
+    // common case of a tool mounted on the flange, and lets a single URDF serve multiple tools.
+    const double flange_extension = get_param<double>(node, prefix + "flange_extension", 0.0);
+
+    // Full 6-DoF override, also expressed in the tip frame, applied on top of flange_extension.
+    const std::vector<double> zeros3 = { 0.0, 0.0, 0.0 };
+    const std::vector<double> xyz = get_param(node, prefix + "tool_offset_xyz", zeros3);
+    const std::vector<double> rpy = get_param(node, prefix + "tool_offset_rpy", zeros3);
+
+    if (xyz.size() != 3 || rpy.size() != 3)
+    {
+        RCLCPP_ERROR(LOGGER, "tool_offset_xyz and tool_offset_rpy must each have 3 elements");
+        return false;
+    }
+
+    T_rostool_tcp_ = Eigen::Isometry3d::Identity();
+    T_rostool_tcp_.linear() = Eigen::Matrix3d(Eigen::AngleAxisd(rpy[2], Eigen::Vector3d::UnitZ()) *
+                                              Eigen::AngleAxisd(rpy[1], Eigen::Vector3d::UnitY()) *
+                                              Eigen::AngleAxisd(rpy[0], Eigen::Vector3d::UnitX()));
+    T_rostool_tcp_.translation() =
+        Eigen::Vector3d(xyz[0], xyz[1], xyz[2] + flange_extension);
+
+    if (!T_rostool_tcp_.isApprox(Eigen::Isometry3d::Identity()))
+    {
+        const auto& t = T_rostool_tcp_.translation();
+        RCLCPP_INFO(LOGGER,
+                    "TCP offset from '%s': [%.4f, %.4f, %.4f]",
+                    getTipFrame().c_str(),
+                    t.x(),
+                    t.y(),
+                    t.z());
+    }
+
+    const std::string selection = get_param<std::string>(node, prefix + "solution_selection", "distance");
+    if (selection == "distance")
+    {
+        solution_selection_ = SolutionSelection::distance;
+    }
+    else if (selection == "manip1")
+    {
+        solution_selection_ = SolutionSelection::manip1;
+    }
+    else if (selection == "manip2")
+    {
+        solution_selection_ = SolutionSelection::manip2;
+    }
+    else if (selection == "clearance")
+    {
+        solution_selection_ = SolutionSelection::clearance;
+    }
+    else
+    {
+        RCLCPP_ERROR(LOGGER,
+                     "Unknown solution_selection '%s'. Expected distance, manip1, manip2 or "
+                     "clearance",
+                     selection.c_str());
+        return false;
+    }
+
+    min_manipulability_ = get_param<double>(node, prefix + "min_manipulability", 0.0);
+    seed_bias_ = get_param<double>(node, prefix + "seed_bias", 0.0);
+
+    check_self_collision_ = get_param<bool>(node, prefix + "self_collision_check", false);
+    const std::string detector = get_param<std::string>(node, prefix + "collision_detector", "fcl");
+
+    if (detector != "fcl" && detector != "bullet")
+    {
+        RCLCPP_ERROR(
+            LOGGER, "Unknown collision_detector '%s'. Expected fcl or bullet", detector.c_str());
+        return false;
+    }
+
+    // Bullet's distanceSelf() is an unimplemented stub in MoveIt (it logs and returns nothing),
+    // so clearance ranking is only possible with FCL. Fail loudly at startup rather than
+    // silently ranking every solution as equally clear.
+    if (solution_selection_ == SolutionSelection::clearance && detector != "fcl")
+    {
+        RCLCPP_ERROR(LOGGER,
+                     "solution_selection 'clearance' requires collision_detector 'fcl'. Bullet "
+                     "does not implement distance queries.");
+        return false;
+    }
+
+    if (check_self_collision_ || solution_selection_ == SolutionSelection::clearance)
+    {
+        if (detector == "bullet")
         {
-            moveit::core::RobotState rs(robot_model_);
-            rs.setToDefaultValues();
-            Eigen::Isometry3d T_base_tool0 = rs.getGlobalLinkTransform("flange");
-            Eigen::Isometry3d T_base_tip = rs.getGlobalLinkTransform(tip);
-            tip_offset_ = T_base_tool0.inverse() * T_base_tip;
-            Eigen::Vector3d trans = tip_offset_.translation();
-            Eigen::Quaterniond rot(tip_offset_.linear());
-            RCLCPP_INFO(kinematics::KinematicsBase::LOGGER, "tip_offset trans=[%.3f, %.3f, %.3f], rot=[%.3f, %.3f, %.3f, %.3f]",
-                        trans.x(), trans.y(), trans.z(), rot.w(), rot.x(), rot.y(), rot.z());
-            RCLCPP_INFO(kinematics::KinematicsBase::LOGGER, "Computed tip offset flange->%s", tip.c_str());
+            collision_env_ = std::make_shared<collision_detection::CollisionEnvBullet>(robot_model_);
+        }
+        else
+        {
+            collision_env_ = std::make_shared<collision_detection::CollisionEnvFCL>(robot_model_);
+        }
+
+        // Build the ACM from the SRDF's disabled pairs, the same set MoveIt Setup Assistant
+        // generates. Everything else defaults to "must be checked".
+        acm_ = collision_detection::AllowedCollisionMatrix(
+            robot_model_->getLinkModelNamesWithCollisionGeometry(), /*allowed=*/false);
+        for (const auto& pair : robot_model_->getSRDF()->getDisabledCollisionPairs())
+        {
+            acm_.setEntry(pair.link1_, pair.link2_, true);
+        }
+
+        if (robot_model_->getLinkModelNamesWithCollisionGeometry().empty())
+        {
+            RCLCPP_WARN(LOGGER,
+                        "Self-collision checking is enabled but the model has no collision "
+                        "geometry. Every solution will appear collision-free.");
+        }
+
+        RCLCPP_INFO(LOGGER, "Self-collision checking enabled using '%s'", detector.c_str());
+    }
+
+    RCLCPP_INFO(LOGGER,
+                "solution_selection: '%s', min_manipulability: %.4g, seed_bias: %.4g",
+                selection.c_str(),
+                min_manipulability_,
+                seed_bias_);
+
+    return true;
+}
+
+bool CRXKinematicsPlugin::DoIK(const geometry_msgs::msg::Pose& ik_pose,
+                               std::vector<double>& solution,
+                               moveit_msgs::msg::MoveItErrorCodes& error_code,
+                               const std::vector<double>& reference_joint_values,
+                               const IKCallbackFn& solution_callback) const
+{
+    Eigen::Isometry3d T_R0_tcp;
+    tf2::fromMsg(ik_pose, T_R0_tcp);
+
+    // ROS pose is given in base frame, but CRXRobot::IK expects it in "R0" (pendant origin) frame
+    T_R0_tcp.translation().z() = T_R0_tcp.translation().z() - base_j1_height_;
+
+    // The requested pose is that of the TCP. Strip any configured flange extension / tool offset
+    // to recover the pose of the URDF tip frame, which is what the solver reasons about.
+    const Eigen::Isometry3d T_R0_rostool = T_R0_tcp * T_rostool_tcp_.inverse();
+
+    // Account for the different definitions of the TCP frame between the Fanuc official URDFs and
+    // Abbes and Poisson.
+    const Eigen::Isometry3d T_R0_tool = T_R0_rostool * T_rostool_pendanttool_;
+
+    // Find all IK solutions
+    const std::vector<std::array<double, 6>> ik_solutions = robot_.ik(T_R0_tool);
+
+    // Retain only valid IK solutions. A solution is valid if it fulfils the 3 following criteria:
+    std::vector<std::vector<double>> valid_ik_solutions;
+    valid_ik_solutions.reserve(ik_solutions.size());
+    for (const auto& ik_sol : ik_solutions)
+    {
+        const auto ik_sol_vec = std::vector<double>(ik_sol.begin(), ik_sol.end());
+
+        // 1: FK on the solution leads exactly to the desired pose
+        if (!reproduces_desired_pose(ik_sol_vec, T_R0_tcp))
+        {
+            // In rare cases (~0.1%) some IK solutions can have a large error (up to ~3 cm).
+            // The reason isn't known, but one likely culprit is numerical instabilities in
+            // determine_joint_values.
+            // I've yet to see any cases where orientation alone has had a large error, but that's
+            // checked for as well (better safe than sorry).
+            continue;
+        }
+
+        // 2: Respects joint limits
+        if (!respects_joint_limits(ik_sol_vec))
+        {
+            continue;
+        }
+
+        // 3: Survives the user-defined callback (if provided)
+        moveit_msgs::msg::MoveItErrorCodes error_code;
+        solution_callback ? solution_callback(ik_pose, ik_sol_vec, error_code) :
+                            [&error_code]() { error_code.val = error_code.SUCCESS; }();
+        if (error_code.val == error_code.SUCCESS)
+        {
+            valid_ik_solutions.push_back(std::move(ik_sol_vec));
         }
     }
 
-    RCLCPP_INFO(kinematics::KinematicsBase::LOGGER, "CRXKinematicsPlugin initialized successfully");
+    RCLCPP_DEBUG(LOGGER, "solutions: %lu->%lu", ik_solutions.size(), valid_ik_solutions.size());
+
+    if (valid_ik_solutions.empty())
+    {
+        error_code.val = moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION;
+        return false;
+    }
+
+    // Constructing a RobotState dominates the cost of both the Jacobian and the collision queries,
+    // so build one here and reuse it for every candidate. In plain distance mode with no collision
+    // checking it is never touched.
+    const bool needs_state =
+        solution_selection_ != SolutionSelection::distance || check_self_collision_;
+    moveit::core::RobotState state(robot_model_);
+    if (needs_state)
+    {
+        state.setToDefaultValues();
+    }
+
+    // Reject solutions that are too close to a singularity, if a floor has been configured.
+    const bool has_manipulability_metric = solution_selection_ == SolutionSelection::manip1 ||
+                                           solution_selection_ == SolutionSelection::manip2;
+    if (min_manipulability_ > 0.0 && has_manipulability_metric)
+    {
+        const auto too_singular = [this, &state](const std::vector<double>& ik_sol) {
+            const double m = solution_selection_ == SolutionSelection::manip1 ?
+                                 manipulability(state, ik_sol) :
+                                 inverse_condition_number(state, ik_sol);
+            return m < min_manipulability_;
+        };
+        std::erase_if(valid_ik_solutions, too_singular);
+
+        if (valid_ik_solutions.empty())
+        {
+            RCLCPP_DEBUG(LOGGER, "All IK solutions fell below min_manipulability");
+            error_code.val = moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION;
+            return false;
+        }
+    }
+
+    // Rank the candidates. score() is written so that lower is always better, whichever metric is
+    // active. Scores are computed once up front rather than as a sort projection, since a
+    // projection would be re-invoked O(n log n) times and each call may cost a Jacobian or a
+    // collision distance query.
+    std::vector<std::pair<double, std::size_t>> ranked;
+    ranked.reserve(valid_ik_solutions.size());
+    for (std::size_t i = 0; i < valid_ik_solutions.size(); ++i)
+    {
+        ranked.emplace_back(score(state, valid_ik_solutions[i], reference_joint_values), i);
+    }
+    std::ranges::sort(ranked);
+
+    // Self-collision is checked lazily, in rank order, so the common case costs one query rather
+    // than one per candidate. Note this deliberately runs *after* ranking: it is a feasibility
+    // filter, not a ranking term. Use solution_selection 'clearance' to rank by it instead.
+    for (const auto& [candidate_score, index] : ranked)
+    {
+        if (check_self_collision_ && is_self_colliding(state, valid_ik_solutions[index]))
+        {
+            continue;
+        }
+
+        solution = valid_ik_solutions[index];
+        error_code.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
+        return true;
+    }
+
+    RCLCPP_DEBUG(LOGGER, "Every IK solution was in self-collision");
+    error_code.val = moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION;
+    return false;
+}
+
+bool CRXKinematicsPlugin::is_self_colliding(moveit::core::RobotState& state,
+                                            const std::vector<double>& joint_values) const
+{
+    if (!collision_env_)
+    {
+        return false;
+    }
+
+    state.setJointGroupPositions(jmg_, joint_values);
+    state.updateCollisionBodyTransforms();
+
+    collision_detection::CollisionRequest request;
+    request.distance = false;
+    collision_detection::CollisionResult result;
+    collision_env_->checkSelfCollision(request, result, state, acm_);
+
+    return result.collision;
+}
+
+double CRXKinematicsPlugin::self_clearance(moveit::core::RobotState& state,
+                                           const std::vector<double>& joint_values) const
+{
+    if (!collision_env_)
+    {
+        return 0.0;
+    }
+
+    state.setJointGroupPositions(jmg_, joint_values);
+    state.updateCollisionBodyTransforms();
+
+    return collision_env_->distanceSelf(state, acm_);
+}
+
+// Convenience overloads for external callers; see the note above the manipulability pair.
+
+bool CRXKinematicsPlugin::is_self_colliding(const std::vector<double>& joint_values) const
+{
+    moveit::core::RobotState state(robot_model_);
+    state.setToDefaultValues();
+    return is_self_colliding(state, joint_values);
+}
+
+double CRXKinematicsPlugin::self_clearance(const std::vector<double>& joint_values) const
+{
+    moveit::core::RobotState state(robot_model_);
+    state.setToDefaultValues();
+    return self_clearance(state, joint_values);
+}
+
+namespace
+{
+/// L1 distance in joint space. Returns 0 when no usable seed was supplied.
+double seed_distance(const std::vector<double>& solution,
+                     const std::vector<double>& reference_joint_values)
+{
+    if (reference_joint_values.size() != 6)
+    {
+        return 0.0;
+    }
+
+    double distance = 0.0;
+    for (std::size_t i = 0; i < 6; ++i)
+    {
+        distance += std::abs(solution[i] - reference_joint_values[i]);
+    }
+    return distance;
+}
+}  // namespace
+
+double CRXKinematicsPlugin::score(moveit::core::RobotState& state,
+                                  const std::vector<double>& solution,
+                                  const std::vector<double>& reference_joint_values) const
+{
+    const double distance = seed_distance(solution, reference_joint_values);
+
+    switch (solution_selection_)
+    {
+        case SolutionSelection::distance:
+            return distance;
+        case SolutionSelection::manip1:
+            // Negated so that lower remains better. seed_bias_ trades manipulability against
+            // continuity with the previous state; note the two terms have different units, so it
+            // needs tuning per robot and tool.
+            return -manipulability(state, solution) + seed_bias_ * distance;
+        case SolutionSelection::manip2:
+            return -inverse_condition_number(state, solution) + seed_bias_ * distance;
+        case SolutionSelection::clearance:
+            return -self_clearance(state, solution) + seed_bias_ * distance;
+    }
+
+    return distance;  // Unreachable; keeps the compiler happy.
+}
+
+Eigen::MatrixXd CRXKinematicsPlugin::jacobian(moveit::core::RobotState& state,
+                                             const std::vector<double>& joint_values) const
+{
+    state.setJointGroupPositions(jmg_, joint_values);
+    state.updateLinkTransforms();
+
+    Eigen::MatrixXd J;
+    // The reference point is the TCP, expressed in the tip link frame. Passing it here is what
+    // makes a flange extension actually show up in the translational rows of the Jacobian.
+    if (!state.getJacobian(jmg_, tip_link_, T_rostool_tcp_.translation(), J))
+    {
+        RCLCPP_ERROR(LOGGER, "Failed to compute Jacobian");
+        return Eigen::MatrixXd::Zero(6, 6);
+    }
+    return J;
+}
+
+double CRXKinematicsPlugin::manipulability(moveit::core::RobotState& state,
+                                           const std::vector<double>& joint_values) const
+{
+    const Eigen::MatrixXd J = jacobian(state, joint_values);
+    // For a square (6x6) Jacobian this is just |det(J)|, but going via J * J^T keeps the
+    // definition valid if the group ever gains a redundant joint.
+    const double determinant = (J * J.transpose()).determinant();
+    return std::sqrt(std::max(0.0, determinant));
+}
+
+double CRXKinematicsPlugin::inverse_condition_number(moveit::core::RobotState& state,
+                                                     const std::vector<double>& joint_values) const
+{
+    const Eigen::MatrixXd J = jacobian(state, joint_values);
+    const Eigen::JacobiSVD<Eigen::MatrixXd> svd(J);
+    const auto& singular_values = svd.singularValues();
+
+    const double largest = singular_values(0);
+    const double smallest = singular_values(singular_values.size() - 1);
+
+    return largest < std::numeric_limits<double>::epsilon() ? 0.0 : smallest / largest;
+}
+
+// Convenience overloads for external callers. Constructing a RobotState is by far the most
+// expensive part of evaluating either metric, so DoIK builds one per call and reuses it across
+// candidate solutions rather than going through these.
+
+double CRXKinematicsPlugin::manipulability(const std::vector<double>& joint_values) const
+{
+    moveit::core::RobotState state(robot_model_);
+    state.setToDefaultValues();
+    return manipulability(state, joint_values);
+}
+
+double CRXKinematicsPlugin::inverse_condition_number(const std::vector<double>& joint_values) const
+{
+    moveit::core::RobotState state(robot_model_);
+    state.setToDefaultValues();
+    return inverse_condition_number(state, joint_values);
+}
+
+bool CRXKinematicsPlugin::extract_joint_limits_and_tcp_orientation()
+{
+    int joints_traversed = 0;
+    for (const auto& joint_name : joint_names_)
+    {
+        const urdf::JointConstSharedPtr joint = robot_model_->getURDF()->getJoint(joint_name);
+
+        if (joint->type == urdf::Joint::REVOLUTE)
+        {
+            constexpr auto lowest = std::numeric_limits<double>::lowest();
+            constexpr auto highest = std::numeric_limits<double>::max();
+
+            const urdf::JointLimitsSharedPtr limits = joint->limits;
+            joint_limits_min_[joints_traversed] = limits ? limits->lower : lowest;
+            joint_limits_max_[joints_traversed] = limits ? limits->upper : highest;
+
+            ++joints_traversed;
+        }
+    }
+
+    if (joints_traversed != 6)
+    {
+        RCLCPP_ERROR(LOGGER, "Expected to find 6 revolute joints. Found %i", joints_traversed);
+        return false;
+    }
+
+    // The internals of crx_kinematics::CRXRobot expects the tip to be "Z forward, X up" at rest
+    const Eigen::Quaterniond pendanttool_orientation =
+        Eigen::AngleAxisd(-M_PI / 2, Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitX());
+
+    // Figure out what the tip orientation is for the URDF / planning group in use
+    auto all_zero_state = moveit::core::RobotState(robot_model_);
+    all_zero_state.setVariablePositions({ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 });
+    const auto rostool_orientation =
+        Eigen::Quaterniond(all_zero_state.getGlobalLinkTransform(getTipFrame()).linear());
+
+    // Store the (purely rotational) transformation converting between the two orientations.
+    T_rostool_pendanttool_.translation().setZero();
+    T_rostool_pendanttool_.linear() =
+        Eigen::Matrix3d(rostool_orientation.inverse() * pendanttool_orientation);
+
     return true;
 }
+
+bool CRXKinematicsPlugin::respects_joint_limits(const std::vector<double>& solution) const
+{
+    for (std::size_t i = 0; i < solution.size(); ++i)
+    {
+        if (solution[i] > joint_limits_max_[i] || solution[i] < joint_limits_min_[i])
+        {
+            return false;
+        }
+    }
+    return true;
+};
+
+bool CRXKinematicsPlugin::reproduces_desired_pose(const std::vector<double>& solution,
+                                                  const Eigen::Isometry3d& T_R0_tcp) const
+{
+    std::vector<geometry_msgs::msg::Pose> poses;
+    getPositionFK({ getTipFrame() }, solution, poses);
+
+    Eigen::Isometry3d T_R0_tcpagain;
+    tf2::fromMsg(poses[0], T_R0_tcpagain);
+    T_R0_tcpagain.translation().z() -= base_j1_height_;
+
+    const auto& p1 = T_R0_tcp.translation();
+    const auto& p2 = T_R0_tcpagain.translation();
+    const auto q1 = Eigen::Quaterniond(T_R0_tcp.linear());
+    const auto q2 = Eigen::Quaterniond(T_R0_tcpagain.linear());
+
+    const auto position_diff_squared = (p1 - p2).squaredNorm();
+    const auto orientation_diff = q1.angularDistance(q2);
+    if (position_diff_squared > 1e-6 * 1e-6 || orientation_diff > 0.01 * M_PI / 180)
+    {
+        return false;
+    }
+    return true;
+}
+
+// Virtual function override boilerplate below
 
 bool CRXKinematicsPlugin::getPositionIK(const geometry_msgs::msg::Pose& ik_pose,
                                         const std::vector<double>& ik_seed_state,
                                         std::vector<double>& solution,
                                         moveit_msgs::msg::MoveItErrorCodes& error_code,
-                                        const kinematics::KinematicsQueryOptions& options) const
+                                        const kinematics::KinematicsQueryOptions& /*options*/) const
 {
-    if (!g_robot)
-    {
-        RCLCPP_ERROR(rclcpp::get_logger("crx_kinematics"), "Robot instance not initialized");
-        error_code.val = moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION;
-        return false;
-    }
-
-    // The ik_pose is in the plugin's base_frame_ (planning_frame).
-    RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"),
-                "IK request received in frame '%s': pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f]",
-                base_frame_.c_str(),
-                ik_pose.position.x, ik_pose.position.y, ik_pose.position.z,
-                ik_pose.orientation.w, ik_pose.orientation.x, ik_pose.orientation.y, ik_pose.orientation.z);
-
-    // Log the latest marker pose for comparison
-    {
-        std::lock_guard<std::mutex> lock(marker_pose_mutex_);
-        RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"),
-                    "Latest marker pose in frame '%s': pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f]",
-                    "cylinder_stand", // Assuming this frame, as seen in the topic output
-                    latest_marker_pose_.position.x, latest_marker_pose_.position.y, latest_marker_pose_.position.z,
-                    latest_marker_pose_.orientation.w, latest_marker_pose_.orientation.x, latest_marker_pose_.orientation.y, latest_marker_pose_.orientation.z);
-    }
-
-    // Transform it to the robot's base frame for the IK solver.
-    geometry_msgs::msg::Pose pose_in_robot_base = ik_pose;
-    if (base_frame_ != robot_base_frame_ && tf_buffer_)
-    {
-        try
-        {
-            geometry_msgs::msg::TransformStamped tf = tf_buffer_->lookupTransform(robot_base_frame_, base_frame_, rclcpp::Time(0), rclcpp::Duration::from_seconds(0.2));
-            tf2::doTransform(ik_pose, pose_in_robot_base, tf);
-            RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"), "Transformed pose from %s to %s", base_frame_.c_str(), robot_base_frame_.c_str());
-        }
-        catch (const tf2::TransformException& ex)
-        {
-            RCLCPP_WARN(kinematics::KinematicsBase::LOGGER, "TF transform %s->%s failed: %s", base_frame_.c_str(), robot_base_frame_.c_str(), ex.what());
-            error_code.val = moveit_msgs::msg::MoveItErrorCodes::FRAME_TRANSFORM_FAILURE;
-            return false;
-        }
-    }
-    // Convert geometry_msgs Pose to Eigen::Isometry3d using tf2_eigen
-    Eigen::Isometry3d target_pose;
-    tf2::fromMsg(pose_in_robot_base, target_pose);
-
-    // Adjust for tip offset: IK expects pose of flange, but target is for tip
-    Eigen::Isometry3d desired_flange = target_pose * tip_offset_.inverse();
-
-    RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"), "IK input pose: pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f]",
-                ik_pose.position.x, ik_pose.position.y, ik_pose.position.z,
-                ik_pose.orientation.w, ik_pose.orientation.x, ik_pose.orientation.y, ik_pose.orientation.z);
-    RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"), "Pose in base: pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f]",
-                pose_in_robot_base.position.x, pose_in_robot_base.position.y, pose_in_robot_base.position.z,
-                pose_in_robot_base.orientation.w, pose_in_robot_base.orientation.x, pose_in_robot_base.orientation.y, pose_in_robot_base.orientation.z);
-
-    RCLCPP_DEBUG(kinematics::KinematicsBase::LOGGER,
-                 "Computing IK for pose: [%.3f, %.3f, %.3f]", 
-                 ik_pose.position.x, ik_pose.position.y, ik_pose.position.z);
-
-    // Get all IK solutions (radians)
-    auto ik_solutions = g_robot->ik(desired_flange);
-
-    if (ik_solutions.empty())
-    {
-        RCLCPP_WARN(rclcpp::get_logger("crx_kinematics"),
-                    "No IK solutions found for pose [%.3f, %.3f, %.3f]",
-                    ik_pose.position.x, ik_pose.position.y, ik_pose.position.z);
-        error_code.val = moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION;
-        return false;
-    }
-
-    // Prepare joint limits from the RobotModel (similar to KDL plugin approach)
-    const moveit::core::JointModelGroup* jmg = robot_model_->getJointModelGroup(getGroupName());
-    std::vector<std::pair<double,double>> limits;
-    limits.reserve(6);
-    if (jmg)
-    {
-        const auto& joint_models = jmg->getJointModels();
-        for (const auto* jm : joint_models)
-        {
-            const auto& bounds = jm->getVariableBoundsMsg();
-            for (const auto& b : bounds)
-            {
-                limits.emplace_back(b.min_position, b.max_position);
-            }
-        }
-    }
-
-    auto within_limits = [&limits](const std::array<double,6>& q){
-        if (limits.size() != 6) return true; // fallback if limits missing
-        for (size_t i=0;i<6;++i)
-        {
-            if (q[i] < limits[i].first - 1e-6 || q[i] > limits[i].second + 1e-6)
-                return false;
-        }
-        return true;
-    };
-
-    // Select best solution
-    double best_cost = std::numeric_limits<double>::infinity();
-    std::array<double,6> best{};
-    for (const auto& sol : ik_solutions)
-    {
-        if (!within_limits(sol))
-            continue;
-        // Compute FK to tool0 then to actual tip
-        Eigen::Isometry3d T_tool = g_robot->fk(sol);
-        Eigen::Isometry3d T = T_tool * tip_offset_;
-        const Eigen::Vector3d dp = T.translation() - target_pose.translation();
-        const Eigen::Matrix3d R_err = T.linear().transpose() * target_pose.linear();
-        const double angle = std::acos(std::min(1.0, std::max(-1.0, (R_err.trace() - 1.0) / 2.0)));
-        double cost = dp.squaredNorm() + 0.5 * angle * angle;
-        // If a non-empty seed is provided (RViz passes current state), bias towards it
-        if (ik_seed_state.size() == 6)
-        {
-            double seed_cost = 0.0;
-            for (size_t i = 0; i < 6; ++i)
-            {
-                const double d = sol[i] - ik_seed_state[i];
-                seed_cost += d * d;
-            }
-            // Small weight to prefer the same branch without overriding pose accuracy
-            cost += 0.05 * seed_cost;
-        }
-        if (cost < best_cost)
-        {
-            best_cost = cost;
-            best = sol;
-        }
-    }
-
-    if (!std::isfinite(best_cost))
-    {
-        RCLCPP_WARN(kinematics::KinematicsBase::LOGGER, "No valid IK solution matched target pose");
-        error_code.val = moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION;
-        return false;
-    }
-    // Validate best solution against strict thresholds and log diagnostics
-    Eigen::Isometry3d T_best = g_robot->fk(best) * tip_offset_;
-    const Eigen::Vector3d dp_best = T_best.translation() - target_pose.translation();
-    const Eigen::Matrix3d R_err_best = T_best.linear().transpose() * target_pose.linear();
-    const double angle_best = std::acos(std::min(1.0, std::max(-1.0, (R_err_best.trace() - 1.0) / 2.0)));
-    const Eigen::Quaterniond q_target(target_pose.linear());
-    RCLCPP_INFO(kinematics::KinematicsBase::LOGGER,
-                "Target pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f]",
-                target_pose.translation().x(), target_pose.translation().y(), target_pose.translation().z(),
-                q_target.w(), q_target.x(), q_target.y(), q_target.z());
-    const Eigen::Quaterniond q_best(T_best.linear());
-    RCLCPP_INFO(kinematics::KinematicsBase::LOGGER,
-                "Best   pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f], dpos=%.6f, ang_err=%.6f",
-                T_best.translation().x(), T_best.translation().y(), T_best.translation().z(),
-                q_best.w(), q_best.x(), q_best.y(), q_best.z(), dp_best.norm(), angle_best);
-    if (dp_best.norm() > 1e-3 || angle_best > 1e-2)
-    {
-        RCLCPP_WARN(kinematics::KinematicsBase::LOGGER,
-                    "Best IK does not meet thresholds (dpos=%.6f, ang=%.6f)", dp_best.norm(), angle_best);
-        error_code.val = moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION;
-        return false;
-    }
-
-    // Use RobotState to map the 6-DOF solution to the potentially larger joint group
-    moveit::core::RobotState state(robot_model_);
-    if (ik_seed_state.size() == getJointNames().size())
-    {
-        state.setJointGroupPositions(getGroupName(), ik_seed_state);
-    }
-    else
-    {
-        state.setToDefaultValues();
-    }
-    // Create a map of joint names to the solution values
-    std::map<std::string, double> joint_values;
-    for (size_t i = 0; i < 6; ++i)
-    {
-        joint_values["J" + std::to_string(i + 1)] = best[i];
-    }
-    state.setVariablePositions(joint_values);
-
-    // Copy the full joint group state to the output solution
-    state.copyJointGroupPositions(getGroupName(), solution);
-
-
-    // Log the selected solution in degrees for readability
-    std::vector<double> solution_deg;
-    for (double rad : solution) solution_deg.push_back(rad * 180.0 / M_PI);
-    RCLCPP_INFO(kinematics::KinematicsBase::LOGGER, "Selected IK solution (degrees): [%.2f, %.2f, %.2f, %.2f, %.2f, %.2f]",
-                solution_deg[0], solution_deg[1], solution_deg[2], solution_deg[3], solution_deg[4], solution_deg[5]);
-
-    error_code.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
-    return true;
+    return DoIK(ik_pose, solution, error_code, ik_seed_state);
 }
 
-bool CRXKinematicsPlugin::getPositionIK(const std::vector<geometry_msgs::msg::Pose>& ik_poses,
-                                        const std::vector<double>& ik_seed_state,
-                                        std::vector<std::vector<double>>& solutions,
-                                        kinematics::KinematicsResult& result,
-                                        const kinematics::KinematicsQueryOptions& options) const
+bool CRXKinematicsPlugin::searchPositionIK(
+    const geometry_msgs::msg::Pose& ik_pose,
+    const std::vector<double>& ik_seed_state,
+    double /*timeout*/,
+    std::vector<double>& solution,
+    moveit_msgs::msg::MoveItErrorCodes& error_code,
+    const kinematics::KinematicsQueryOptions& /*options*/) const
 {
-    if (!g_robot || ik_poses.empty())
-    {
-        RCLCPP_ERROR(kinematics::KinematicsBase::LOGGER,
-                     "Robot not initialized or no poses provided");
-        result.kinematic_error = kinematics::KinematicErrors::NO_SOLUTION;
-        return false;
-    }
-
-    // For now, solve for the first pose only
-    const auto& ik_pose = ik_poses[0];
-
-    // If planning frame differs, transform pose into base_frame_
-    geometry_msgs::msg::Pose pose_in_base = ik_pose;
-    if (!planning_frame_.empty() && planning_frame_ != base_frame_ && tf_buffer_)
-    {
-        try
-        {
-            geometry_msgs::msg::TransformStamped tf = tf_buffer_->lookupTransform(base_frame_, planning_frame_, rclcpp::Time(0), rclcpp::Duration::from_seconds(0.2));
-            tf2::doTransform(ik_pose, pose_in_base, tf);
-            RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"), "Transformed pose from %s to %s", planning_frame_.c_str(), base_frame_.c_str());
-        }
-        catch (const tf2::TransformException& ex)
-        {
-            RCLCPP_WARN(kinematics::KinematicsBase::LOGGER, "TF transform %s->%s failed: %s", planning_frame_.c_str(), base_frame_.c_str(), ex.what());
-        }
-    }
-
-    // Convert geometry_msgs Pose to Eigen::Isometry3d using tf2_eigen
-    Eigen::Isometry3d target_pose;
-    tf2::fromMsg(pose_in_base, target_pose);
-
-    // Adjust for tip offset
-    Eigen::Isometry3d desired_flange = target_pose * tip_offset_.inverse();
-
-    RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"), "Multi-IK input pose: pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f]",
-                ik_pose.position.x, ik_pose.position.y, ik_pose.position.z,
-                ik_pose.orientation.w, ik_pose.orientation.x, ik_pose.orientation.y, ik_pose.orientation.z);
-    RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"), "Pose in base: pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f]",
-                pose_in_base.position.x, pose_in_base.position.y, pose_in_base.position.z,
-                pose_in_base.orientation.w, pose_in_base.orientation.x, pose_in_base.orientation.y, pose_in_base.orientation.z);
-
-    // Log the latest marker pose for comparison (debugging)
-    {
-        std::lock_guard<std::mutex> lock(marker_pose_mutex_);
-        RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"),
-                    "Latest marker pose in frame '%s': pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f]",
-                    "cylinder_stand",
-                    latest_marker_pose_.position.x, latest_marker_pose_.position.y, latest_marker_pose_.position.z,
-                    latest_marker_pose_.orientation.w, latest_marker_pose_.orientation.x, latest_marker_pose_.orientation.y, latest_marker_pose_.orientation.z);
-    }
-
-    RCLCPP_DEBUG(kinematics::KinematicsBase::LOGGER,
-                 "Computing multi-solution IK for pose: [%.3f, %.3f, %.3f]",
-                 ik_pose.position.x, ik_pose.position.y, ik_pose.position.z);
-
-    // Get all IK solutions
-    auto ik_solutions = g_robot->ik(desired_flange);
-
-    if (ik_solutions.empty())
-    {
-        RCLCPP_WARN(kinematics::KinematicsBase::LOGGER,
-                    "No IK solutions found for pose [%.3f, %.3f, %.3f]",
-                    ik_pose.position.x, ik_pose.position.y, ik_pose.position.z);
-        result.kinematic_error = kinematics::KinematicErrors::NO_SOLUTION;
-        return false;
-    }
-
-    // Convert all solutions to the output format
-    solutions.clear();
-    for (const auto& sol : ik_solutions)
-    {
-        std::vector<double> converted_sol;
-        for (double angle : sol)
-            converted_sol.push_back(angle);
-        solutions.push_back(converted_sol);
-    }
-
-    RCLCPP_INFO(kinematics::KinematicsBase::LOGGER,
-                 "Found %lu IK solutions",
-                 solutions.size());
-
-    result.kinematic_error = kinematics::KinematicErrors::OK;
-    return true;
+    return DoIK(ik_pose, solution, error_code, ik_seed_state);
 }
 
-bool CRXKinematicsPlugin::searchPositionIK(const geometry_msgs::msg::Pose& ik_pose,
-                                           const std::vector<double>& ik_seed_state,
-                                           double timeout,
-                                           std::vector<double>& solution,
-                                           moveit_msgs::msg::MoveItErrorCodes& error_code,
-                                           const kinematics::KinematicsQueryOptions& options) const
+bool CRXKinematicsPlugin::searchPositionIK(
+    const geometry_msgs::msg::Pose& ik_pose,
+    const std::vector<double>& ik_seed_state,
+    double /*timeout*/,
+    const std::vector<double>& /*consistency_limits*/,
+    std::vector<double>& solution,
+    moveit_msgs::msg::MoveItErrorCodes& error_code,
+    const kinematics::KinematicsQueryOptions& /*options*/) const
 {
-    return getPositionIK(ik_pose, ik_seed_state, solution, error_code, options);
+    return DoIK(ik_pose, solution, error_code, ik_seed_state);
 }
 
-bool CRXKinematicsPlugin::searchPositionIK(const geometry_msgs::msg::Pose& ik_pose,
-                                           const std::vector<double>& ik_seed_state,
-                                           double timeout,
-                                           const std::vector<double>& consistency_limits,
-                                           std::vector<double>& solution,
-                                           moveit_msgs::msg::MoveItErrorCodes& error_code,
-                                           const kinematics::KinematicsQueryOptions& options) const
+bool CRXKinematicsPlugin::searchPositionIK(
+    const geometry_msgs::msg::Pose& ik_pose,
+    const std::vector<double>& ik_seed_state,
+    double /*timeout*/,
+    std::vector<double>& solution,
+    const IKCallbackFn& solution_callback,
+    moveit_msgs::msg::MoveItErrorCodes& error_code,
+    const kinematics::KinematicsQueryOptions& /*options*/) const
 {
-    return getPositionIK(ik_pose, ik_seed_state, solution, error_code, options);
+    return DoIK(ik_pose, solution, error_code, ik_seed_state, solution_callback);
 }
 
-bool CRXKinematicsPlugin::searchPositionIK(const geometry_msgs::msg::Pose& ik_pose,
-                                           const std::vector<double>& ik_seed_state,
-                                           double timeout,
-                                           std::vector<double>& solution,
-                                           const IKCallbackFn& solution_callback,
-                                           moveit_msgs::msg::MoveItErrorCodes& error_code,
-                                           const kinematics::KinematicsQueryOptions& options) const
+bool CRXKinematicsPlugin::searchPositionIK(
+    const geometry_msgs::msg::Pose& ik_pose,
+    const std::vector<double>& ik_seed_state,
+    double /*timeout*/,
+    const std::vector<double>& /*consistency_limits*/,
+    std::vector<double>& solution,
+    const IKCallbackFn& solution_callback,
+    moveit_msgs::msg::MoveItErrorCodes& error_code,
+    const kinematics::KinematicsQueryOptions& /*options*/) const
 {
-    if (!g_robot)
-    {
-        RCLCPP_ERROR(kinematics::KinematicsBase::LOGGER, "Robot instance not initialized");
-        error_code.val = moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION;
-        return false;
-    }
-
-    // If planning frame differs, transform pose into base_frame_
-    geometry_msgs::msg::Pose pose_in_base = ik_pose;
-    if (!planning_frame_.empty() && planning_frame_ != base_frame_ && tf_buffer_)
-    {
-        try
-        {
-            geometry_msgs::msg::TransformStamped tf = tf_buffer_->lookupTransform(base_frame_, planning_frame_, rclcpp::Time(0), rclcpp::Duration::from_seconds(0.2));
-            tf2::doTransform(ik_pose, pose_in_base, tf);
-            RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"), "Transformed pose from %s to %s", planning_frame_.c_str(), base_frame_.c_str());
-        }
-        catch (const tf2::TransformException& ex)
-        {
-            RCLCPP_WARN(kinematics::KinematicsBase::LOGGER, "TF transform %s->%s failed: %s", planning_frame_.c_str(), base_frame_.c_str(), ex.what());
-        }
-    }
-
-    // Convert geometry_msgs Pose to Eigen::Isometry3d using tf2_eigen
-    Eigen::Isometry3d target_pose;
-    tf2::fromMsg(pose_in_base, target_pose);
-
-    // Adjust for tip offset
-    Eigen::Isometry3d desired_flange = target_pose * tip_offset_.inverse();
-
-    RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"), "Search-IK input pose: pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f]",
-                ik_pose.position.x, ik_pose.position.y, ik_pose.position.z,
-                ik_pose.orientation.w, ik_pose.orientation.x, ik_pose.orientation.y, ik_pose.orientation.z);
-    RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"), "Pose in base: pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f]",
-                pose_in_base.position.x, pose_in_base.position.y, pose_in_base.position.z,
-                pose_in_base.orientation.w, pose_in_base.orientation.x, pose_in_base.orientation.y, pose_in_base.orientation.z);
-
-    // Log the latest marker pose for comparison (debugging)
-    {
-        std::lock_guard<std::mutex> lock(marker_pose_mutex_);
-        RCLCPP_INFO(rclcpp::get_logger("crx_kinematics"),
-                    "Latest marker pose in frame '%s': pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f]",
-                    "cylinder_stand",
-                    latest_marker_pose_.position.x, latest_marker_pose_.position.y, latest_marker_pose_.position.z,
-                    latest_marker_pose_.orientation.w, latest_marker_pose_.orientation.x, latest_marker_pose_.orientation.y, latest_marker_pose_.orientation.z);
-    }
-
-    RCLCPP_DEBUG(kinematics::KinematicsBase::LOGGER,
-                 "Searching for IK solutions (timeout: %.3f) for pose: [%.3f, %.3f, %.3f]",
-                 timeout, ik_pose.position.x, ik_pose.position.y, ik_pose.position.z);
-
-    // Get all IK solutions
-    auto ik_solutions = g_robot->ik(desired_flange);
-
-    if (ik_solutions.empty())
-    {
-        RCLCPP_WARN(kinematics::KinematicsBase::LOGGER,
-                    "No IK solutions found");
-        error_code.val = moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION;
-        return false;
-    }
-
-    // Prepare joint limits
-    const moveit::core::JointModelGroup* jmg = robot_model_->getJointModelGroup(getGroupName());
-    std::vector<std::pair<double,double>> limits;
-    limits.reserve(6);
-    if (jmg)
-    {
-        const auto& joint_models = jmg->getJointModels();
-        for (const auto* jm : joint_models)
-        {
-            const auto& bounds = jm->getVariableBoundsMsg();
-            for (const auto& b : bounds)
-            {
-                limits.emplace_back(b.min_position, b.max_position);
-            }
-        }
-    }
-
-    auto within_limits = [&limits](const std::array<double,6>& q){
-        if (limits.size() != 6) return true;
-        for (size_t i=0;i<6;++i)
-        {
-            if (q[i] < limits[i].first - 1e-6 || q[i] > limits[i].second + 1e-6)
-                return false;
-        }
-        return true;
-    };
-
-    // Compute costs and filter valid solutions
-    struct SolutionWithCost {
-        std::array<double,6> sol;
-        double cost;
-    };
-    std::vector<SolutionWithCost> valid_solutions;
-    for (const auto& sol : ik_solutions)
-    {
-        if (!within_limits(sol))
-            continue;
-        // Compute FK to tip
-        Eigen::Isometry3d T_tool = g_robot->fk(sol);
-        Eigen::Isometry3d T = T_tool * tip_offset_;
-        const Eigen::Vector3d dp = T.translation() - target_pose.translation();
-        const Eigen::Matrix3d R_err = T.linear().transpose() * target_pose.linear();
-        const double angle = std::acos(std::min(1.0, std::max(-1.0, (R_err.trace() - 1.0) / 2.0)));
-        double cost = dp.squaredNorm() + 0.5 * angle * angle;
-        // Seed bias if provided
-        if (ik_seed_state.size() == 6)
-        {
-            double seed_cost = 0.0;
-            for (size_t i = 0; i < 6; ++i)
-            {
-                const double d = sol[i] - ik_seed_state[i];
-                seed_cost += d * d;
-            }
-            cost += 0.05 * seed_cost;
-        }
-        valid_solutions.push_back({sol, cost});
-    }
-
-    // Sort by cost
-    std::sort(valid_solutions.begin(), valid_solutions.end(), [](const SolutionWithCost& a, const SolutionWithCost& b) {
-        return a.cost < b.cost;
-    });
-
-    // Call the callback for each valid solution in order
-    if (!valid_solutions.empty())
-    {
-        solution.clear();
-        for (double angle : valid_solutions[0].sol)
-            solution.push_back(angle);
-
-        // For the best solution, log the achieved pose
-        Eigen::Isometry3d T_tool = g_robot->fk(valid_solutions[0].sol);
-        Eigen::Isometry3d T = T_tool * tip_offset_;
-        const Eigen::Vector3d dp = T.translation() - target_pose.translation();
-        const Eigen::Matrix3d R_err = T.linear().transpose() * target_pose.linear();
-        const double angle = std::acos(std::min(1.0, std::max(-1.0, (R_err.trace() - 1.0) / 2.0)));
-        const Eigen::Quaterniond q_target(target_pose.linear());
-        const Eigen::Quaterniond q_best(T.linear());
-        RCLCPP_INFO(kinematics::KinematicsBase::LOGGER,
-                    "Target pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f]",
-                    target_pose.translation().x(), target_pose.translation().y(), target_pose.translation().z(),
-                    q_target.w(), q_target.x(), q_target.y(), q_target.z());
-        RCLCPP_INFO(kinematics::KinematicsBase::LOGGER,
-                    "Best   pos=[%.4f, %.4f, %.4f], quat=[%.4f, %.4f, %.4f, %.4f], dpos=%.6f, ang_err=%.6f",
-                    T.translation().x(), T.translation().y(), T.translation().z(),
-                    q_best.w(), q_best.x(), q_best.y(), q_best.z(), dp.norm(), angle);
-
-        // Log the solution in degrees
-        std::vector<double> solution_deg;
-        for (double rad : solution) solution_deg.push_back(rad * 180.0 / M_PI);
-        RCLCPP_INFO(kinematics::KinematicsBase::LOGGER, "IK solution (degrees): [%.2f, %.2f, %.2f, %.2f, %.2f, %.2f], cost=%.6f",
-                    solution_deg[0], solution_deg[1], solution_deg[2], solution_deg[3], solution_deg[4], solution_deg[5],
-                    valid_solutions[0].cost);
-
-        error_code.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
-        solution_callback(ik_pose, solution, error_code);
-        
-        RCLCPP_DEBUG(kinematics::KinematicsBase::LOGGER,
-                     "Called solution callback for best solution, cost=%.6f",
-                     valid_solutions[0].cost);
-    }
-
-    return !valid_solutions.empty();
-}
-
-bool CRXKinematicsPlugin::searchPositionIK(const geometry_msgs::msg::Pose& ik_pose,
-                                           const std::vector<double>& ik_seed_state,
-                                           double timeout,
-                                           const std::vector<double>& consistency_limits,
-                                           std::vector<double>& solution,
-                                           const IKCallbackFn& solution_callback,
-                                           moveit_msgs::msg::MoveItErrorCodes& error_code,
-                                           const kinematics::KinematicsQueryOptions& options) const
-{
-    return searchPositionIK(ik_pose, ik_seed_state, timeout, solution, solution_callback, error_code, options);
+    return DoIK(ik_pose, solution, error_code, ik_seed_state, solution_callback);
 }
 
 bool CRXKinematicsPlugin::getPositionFK(const std::vector<std::string>& link_names,
                                         const std::vector<double>& joint_angles,
                                         std::vector<geometry_msgs::msg::Pose>& poses) const
 {
-    // Use MoveIt's RobotState FK so we stay consistent with the
-    // RobotModel and joint ordering that the rest of MoveIt uses.
-    const moveit::core::JointModelGroup* jmg = robot_model_->getJointModelGroup(getGroupName());
-    if (!jmg)
+    if (!(link_names.size() == 1 && link_names[0] == getTipFrame()))
     {
-        RCLCPP_ERROR(kinematics::KinematicsBase::LOGGER,
-                     "getPositionFK: could not get JointModelGroup '%s'",
-                     getGroupName().c_str());
+        RCLCPP_ERROR(LOGGER,
+                     "This plugin only supports looking up FK for the tip frame ('%s')",
+                     getTipFrame().c_str());
+        return false;
+    }
+    if (joint_angles.size() != 6)
+    {
+        RCLCPP_ERROR(LOGGER, "Expected 6 joint angles for FK, but got %lu", joint_angles.size());
         return false;
     }
 
-    if (joint_angles.size() != jmg->getVariableCount())
-    {
-        RCLCPP_ERROR(kinematics::KinematicsBase::LOGGER,
-                     "getPositionFK: expected %u joint variables, got %lu",
-                     jmg->getVariableCount(), joint_angles.size());
-        return false;
-    }
+    std::array<double, 6> joint_values;
+    std::copy(joint_angles.begin(), joint_angles.end(), joint_values.begin());
 
-    moveit::core::RobotState state(robot_model_);
-    state.setToDefaultValues();
-    state.setJointGroupPositions(jmg, joint_angles);
+    Eigen::Isometry3d T_R0_tool = robot_.fk(joint_values);
+
+    // Translate to put the pose in base frame, not R0 frame.
+    T_R0_tool.translation().z() += base_j1_height_;
+
+    geometry_msgs::msg::Pose fk_pose =
+        Eigen::toMsg(T_R0_tool * T_rostool_pendanttool_.inverse() * T_rostool_tcp_);
 
     poses.clear();
-    poses.reserve(link_names.size());
-
-    for (const auto& link_name : link_names)
-    {
-        const moveit::core::LinkModel* link = robot_model_->getLinkModel(link_name);
-        if (!link)
-        {
-            RCLCPP_ERROR(kinematics::KinematicsBase::LOGGER,
-                         "getPositionFK: unknown link '%s'", link_name.c_str());
-            return false;
-        }
-
-        const Eigen::Isometry3d& T = state.getGlobalLinkTransform(link);
-        geometry_msgs::msg::Pose pose = tf2::toMsg(T);
-
-        RCLCPP_DEBUG(kinematics::KinematicsBase::LOGGER,
-                     "FK(%s): pos=[%.3f, %.3f, %.3f], quat=[%.3f, %.3f, %.3f, %.3f]",
-                     link_name.c_str(),
-                     pose.position.x, pose.position.y, pose.position.z,
-                     pose.orientation.w, pose.orientation.x,
-                     pose.orientation.y, pose.orientation.z);
-
-        poses.push_back(pose);
-    }
-
+    poses.push_back(fk_pose);
     return true;
 }
 
-void CRXKinematicsPlugin::markerUpdateCallback(const visualization_msgs::msg::InteractiveMarkerUpdate::SharedPtr msg)
+bool CRXKinematicsPlugin::getPositionIK(const std::vector<geometry_msgs::msg::Pose>& /*ik_poses*/,
+                                        const std::vector<double>& /*ik_seed_state*/,
+                                        std::vector<std::vector<double>>& /*solutions*/,
+                                        kinematics::KinematicsResult& /*result*/,
+                                        const kinematics::KinematicsQueryOptions& /*options*/) const
 {
-    if (!msg->poses.empty())
-    {
-        std::lock_guard<std::mutex> lock(marker_pose_mutex_);
-        latest_marker_pose_ = msg->poses[0].pose;
-    }
+    return false;  // This is for robots with multiple tip links, not applicable to this plugin.
 }
 
 std::vector<std::string> const& CRXKinematicsPlugin::getJointNames() const

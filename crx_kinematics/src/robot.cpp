@@ -1,7 +1,8 @@
 #include "crx_kinematics/robot.hpp"
+
 #include <cmath>
-#include <iostream>
 #include <fstream>
+#include <iostream>
 #include <limits>
 
 namespace crx_kinematics
@@ -15,16 +16,70 @@ namespace
  * The below params attribute all values in each column to i for convenience, although it's
  * technically incorrect according to the modified DH convention.
  */
-std::array<DHParams, 6> crx_10ia_params()
+std::array<DHParams, 6>
+get_dh_params(const double l_2, const double l_4, const double l_5, const double l_6)
 {
     DHParams L1 = {};
     DHParams L2 = { .alpha = -M_PI / 2, .theta = -M_PI / 2 };
-    DHParams L3 = { .a = 0.71, .alpha = M_PI };
-    DHParams L4 = { .alpha = -M_PI / 2, .r = -0.54 };
-    DHParams L5 = { .alpha = M_PI / 2, .r = 0.15 };
-    DHParams L6 = { .alpha = -M_PI / 2, .r = -0.16 };
+    DHParams L3 = { .a = l_2, .alpha = M_PI };
+    DHParams L4 = { .alpha = -M_PI / 2, .r = -l_4 };
+    DHParams L5 = { .alpha = M_PI / 2, .r = l_5 };
+    DHParams L6 = { .alpha = -M_PI / 2, .r = -l_6 };
 
     return { L1, L2, L3, L4, L5, L6 };
+}
+
+std::array<DHParams, 6> crx3ia_params()
+{
+    return get_dh_params(0.28, 0.28, .111, 0.123);
+}
+
+std::array<DHParams, 6> crx5ia_params()
+{
+    return get_dh_params(0.41, 0.43, 0.13, 0.145);
+}
+
+std::array<DHParams, 6> crx10ia_params()
+{
+    return get_dh_params(0.54, 0.54, 0.15, 0.16);
+}
+
+std::array<DHParams, 6> crx10ia_l_params()
+{
+    return get_dh_params(0.71, 0.54, 0.15, 0.16);
+}
+
+std::array<DHParams, 6> crx20ia_l_params()
+{
+    return crx10ia_l_params();
+}
+
+std::array<DHParams, 6> crx30ia_params()
+{
+    return get_dh_params(0.95, 0.75, 0.185, 0.18);
+}
+
+std::array<DHParams, 6> get_dh_params(const RobotNameEnum& robot_name)
+{
+    switch (robot_name)
+    {
+        case RobotNameEnum::crx3ia:
+            return crx3ia_params();
+        case RobotNameEnum::crx5ia:
+            return crx5ia_params();
+        case RobotNameEnum::crx10ia:
+            return crx10ia_params();
+        case RobotNameEnum::crx10ia_l:
+            return crx10ia_l_params();
+        case RobotNameEnum::crx20ia_l:
+            return crx20ia_l_params();
+        case RobotNameEnum::crx30ia:
+            return crx30ia_params();
+    }
+
+    // The compiler will complain if the above switch is non-exhaustive.
+    // This line is essentially only to guard against static_cast shenanigans.
+    return crx5ia_params();
 }
 
 const Eigen::Matrix4d T_J6_tool = []() {
@@ -186,7 +241,7 @@ std::array<double, 6> determine_joint_values(const Eigen::Vector3d& O3,
     const double J3 = std::atan2(O_1_4.z() - O_1_3.z(), O_1_4.x() - O_1_3.x());
 
     const auto T_L2_L1 = dh_params[1].T(J2).inverse();
-    const auto T_L3_L2 = dh_params[2].T(J2 + J3).inverse();  // Handle Fanuc J2/J3 coupling
+    const auto T_L3_L2 = dh_params[2].T(J2 + J3).inverse();  // Fanuc J2/J3 coupling
 
     const auto T_L3_L0 = T_L3_L2 * T_L2_L1 * T_L1_L0;
     const auto O_3_5 = T_L3_L0 * O5;
@@ -272,15 +327,23 @@ Eigen::Isometry3d DHParams::T(double joint_value) const
     return out;
 }
 
-CRXRobot::CRXRobot() : dh_params(crx_10ia_params())
+CRXRobot::CRXRobot() : dh_params(crx10ia_params()), couple_j2_j3(true)
+{
+}
+
+CRXRobot::CRXRobot(const RobotNameEnum& robot_name, const bool couple_j2_j3)
+  : dh_params(get_dh_params(robot_name)), couple_j2_j3(couple_j2_j3)
 {
 }
 
 Eigen::Isometry3d CRXRobot::fk(const std::array<double, 6>& joint_values) const
 {
+    // Handle Fanuc J2/J3 coupling
+    const double J3 = couple_j2_j3 ? joint_values[2] + joint_values[1] : joint_values[2];
+
     Eigen::Isometry3d out = dh_params[0].T(joint_values[0]);
     out = out * dh_params[1].T(joint_values[1]);
-    out = out * dh_params[2].T(joint_values[2] + joint_values[1]);  // Handle Fanuc J2/J3 coupling
+    out = out * dh_params[2].T(J3);
     out = out * dh_params[3].T(joint_values[3]);
     out = out * dh_params[4].T(joint_values[4]);
     out = out * dh_params[5].T(joint_values[5]);
@@ -318,7 +381,7 @@ std::vector<std::array<double, 6>> CRXRobot::ik(const Eigen::Isometry3d& desired
     // Step 2, 3, 4, 5 and 6
     std::vector<std::array<double, 6>> solutions;
     solutions.reserve(16);
-    for (int q_deg = 1; q_deg < 360; ++q_deg)
+    for (int q_deg = 1; q_deg <= 360; ++q_deg)
     {
         auto circle_evaluation = CircleEvaluation(
             static_cast<double>(q_deg) / 180.0 * M_PI, desired_pose, r4, r5, a3, O5);
@@ -373,6 +436,14 @@ std::vector<std::array<double, 6>> CRXRobot::ik(const Eigen::Isometry3d& desired
             sol[5],
         };
         solutions.push_back(dual);
+    }
+
+    if (!couple_j2_j3)
+    {
+        for (auto& sol : solutions)
+        {
+            sol[2] = harmonize_towards_zero(sol[2] + sol[1]);  // Handle J2/J3 coupling
+        }
     }
 
     return solutions;
