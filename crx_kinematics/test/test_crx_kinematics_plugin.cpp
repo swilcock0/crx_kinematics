@@ -115,7 +115,7 @@ make_plugin(const std::string& robot_name,
     auto robot_model = load_crx_robot_model(robot_name);
 
     auto plugin = crx_kinematics::CRXKinematicsPlugin();
-    if (!plugin.initialize(node, *robot_model, "manipulator", "base_link", { tip_frame }, 0.0))
+    if (!plugin.initialize(node, robot_model, "manipulator", "base_link", { tip_frame }, 0.0))
     {
         throw std::runtime_error("Could not initialize plugin for " + robot_name);
     }

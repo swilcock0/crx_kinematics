@@ -93,6 +93,17 @@ bool CRXKinematicsPlugin::initialize(rclcpp::Node::SharedPtr const& node,
     return extract_joint_limits_and_tcp_orientation();
 }
 
+bool CRXKinematicsPlugin::initialize(rclcpp::Node::SharedPtr const& node,
+                                     moveit::core::RobotModelConstPtr robot_model,
+                                     std::string const& group_name,
+                                     std::string const& base_frame,
+                                     std::vector<std::string> const& tip_frames,
+                                     double search_discretization)
+{
+    robot_model_guard_ = robot_model;
+    return initialize(node, *robot_model, group_name, base_frame, tip_frames, search_discretization);
+}
+
 namespace
 {
 /**

@@ -34,6 +34,23 @@ class CRXKinematicsPlugin : public kinematics::KinematicsBase
                             double search_discretization) override final;
 
     /**
+     * @brief Owning-pointer overload of initialize() for standalone use (e.g. unit tests).
+     *
+     * MoveIt2's KinematicsBase::storeValues stores only a non-owning (noDeleter) shared_ptr to
+     * the RobotModel to break the circular reference RM→JMG→Plugin→RM that arises inside MoveIt.
+     * When a plugin is created outside of that system (e.g. in unit tests), nothing else keeps the
+     * model alive, so `robot_model_` becomes dangling after the caller's shared_ptr goes out of
+     * scope. This overload retains an owning copy of the shared_ptr in `robot_model_guard_`,
+     * ensuring the model outlives the plugin regardless of the caller's lifetime management.
+     */
+    bool initialize(rclcpp::Node::SharedPtr const& node,
+                    moveit::core::RobotModelConstPtr robot_model,
+                    std::string const& group_name,
+                    std::string const& base_frame,
+                    std::vector<std::string> const& tip_frames,
+                    double search_discretization);
+
+    /**
      * @brief Yoshikawa manipulability index, sqrt(det(J * J^T)), evaluated at the TCP.
      * Zero at a singularity. Accounts for any configured flange extension, since a longer
      * tool changes the translational part of the Jacobian.
@@ -160,6 +177,11 @@ class CRXKinematicsPlugin : public kinematics::KinematicsBase
     // Cached for Jacobian evaluation. Both owned by robot_model_.
     const moveit::core::JointModelGroup* jmg_ = nullptr;
     const moveit::core::LinkModel* tip_link_ = nullptr;
+
+    // Owning reference to the RobotModel, populated only when initialized via the shared_ptr
+    // overload. Prevents premature deallocation when the plugin is used outside MoveIt's plugin
+    // system (where the JMG would otherwise keep the model alive).
+    moveit::core::RobotModelConstPtr robot_model_guard_;
 
     SolutionSelection solution_selection_ = SolutionSelection::distance;
     /// Solutions scoring below this on the active metric are rejected. Disabled when <= 0.
