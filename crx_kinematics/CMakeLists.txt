@@ -56,7 +56,8 @@ if(BUILD_TESTING)
     ament_add_gtest(${TEST_NAME} test/${TEST_NAME}.cpp)
     target_include_directories(${TEST_NAME} PRIVATE include)
     target_link_libraries(${TEST_NAME} robot crx_kinematics_plugin
-                          moveit_core::moveit_test_utils tf2_eigen::tf2_eigen)
+                          moveit_core::moveit_test_utils tf2_eigen::tf2_eigen
+                          moveit_core::moveit_collision_detection)
   endfunction()
 
   add_unit_test(test_fk_ik)
