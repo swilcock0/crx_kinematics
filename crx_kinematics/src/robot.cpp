@@ -21,17 +21,10 @@ get_dh_params(const double l_2, const double l_4, const double l_5, const double
 {
     DHParams L1 = {};
     DHParams L2 = { .alpha = -M_PI / 2, .theta = -M_PI / 2 };
-<<<<<<< HEAD
     DHParams L3 = { .a = l_2, .alpha = M_PI };
     DHParams L4 = { .alpha = -M_PI / 2, .r = -l_4 };
     DHParams L5 = { .alpha = M_PI / 2, .r = l_5 };
     DHParams L6 = { .alpha = -M_PI / 2, .r = -l_6 };
-=======
-    DHParams L3 = { .a = 0.71, .alpha = M_PI };
-    DHParams L4 = { .alpha = -M_PI / 2, .r = -0.54 };
-    DHParams L5 = { .alpha = M_PI / 2, .r = 0.15 };
-    DHParams L6 = { .alpha = -M_PI / 2, .r = -0.16 };
->>>>>>> origin/master
 
     return { L1, L2, L3, L4, L5, L6 };
 }

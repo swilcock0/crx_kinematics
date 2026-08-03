@@ -30,7 +30,6 @@ target_include_directories(
                                $<INSTALL_INTERFACE:include/crx_kinematics>)
 target_link_libraries(
   crx_kinematics_plugin
-<<<<<<< HEAD
   PUBLIC moveit_core::moveit_robot_model moveit_core::moveit_kinematics_base
   PRIVATE robot tf2_eigen::tf2_eigen moveit_core::moveit_robot_state
           moveit_core::moveit_collision_detection
@@ -39,12 +38,6 @@ target_link_libraries(
           pluginlib::pluginlib rclcpp::rclcpp)
 target_compile_options(crx_kinematics_plugin PRIVATE -Wall -Wextra -Wpedantic
                                                      -Werror)
-=======
-  PUBLIC moveit_core::moveit_robot_model
-  PRIVATE robot moveit_core::moveit_kinematics_base
-          moveit_core::moveit_robot_state pluginlib::pluginlib rclcpp::rclcpp
-          tf2_eigen::tf2_eigen tf2_kdl::tf2_kdl tf2_ros::tf2_ros tf2_geometry_msgs::tf2_geometry_msgs)
->>>>>>> origin/master
 
 install(DIRECTORY include/ DESTINATION include/crx_kinematics)
 install(
@@ -58,7 +51,6 @@ pluginlib_export_plugin_description_file(moveit_core
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-<<<<<<< HEAD
 
   function(add_unit_test TEST_NAME)
     ament_add_gtest(${TEST_NAME} test/${TEST_NAME}.cpp)
@@ -69,29 +61,6 @@ if(BUILD_TESTING)
 
   add_unit_test(test_fk_ik)
   add_unit_test(test_crx_kinematics_plugin)
-=======
-  ament_add_gtest(test_fk_ik test/test_fk_ik.cpp)
-  target_include_directories(test_fk_ik PRIVATE include)
-  target_link_libraries(test_fk_ik robot)
-
-  ament_add_gtest(test_plugin test/test_plugin.cpp)
-  target_include_directories(test_plugin PRIVATE include)
-  # If the raw shared library was found, create an imported target and link it.
-  if(MOVEIT_UTILS_LIB)
-    add_library(moveit_utils_imported UNKNOWN IMPORTED)
-    set_target_properties(moveit_utils_imported PROPERTIES IMPORTED_LOCATION "${MOVEIT_UTILS_LIB}")
-  else()
-    message(WARNING "moveit_utils library not found; attempting to link without it. If undefined references to loadTestingRobotModel occur, set MOVEIT_UTILS_LIB.")
-  endif()
-  # Consolidate all links into a single plain-signature call to match ament's usage
-  target_link_libraries(test_plugin
-    $<$<BOOL:${MOVEIT_UTILS_LIB}>:moveit_utils_imported>
-    robot
-    crx_kinematics_plugin
-    moveit_core::moveit_robot_model
-    tf2_eigen::tf2_eigen
-    rclcpp::rclcpp)
->>>>>>> origin/master
 endif()
 
 ament_export_targets(export_crx_kinematics HAS_LIBRARY_TARGET)

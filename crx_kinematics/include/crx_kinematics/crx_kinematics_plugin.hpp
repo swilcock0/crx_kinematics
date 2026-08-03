@@ -1,7 +1,6 @@
 #pragma once
 #include <rclcpp/version.h>
 
-<<<<<<< HEAD
 #if RCLCPP_VERSION_GTE(28, 1, 0)  // Jazzy or newer
 #include <moveit/kinematics_base/kinematics_base.hpp>
 #else
@@ -20,15 +19,6 @@
 #endif
 
 #include "crx_kinematics/robot.hpp"
-=======
-#include <moveit/kinematics_base/kinematics_base.h>
-#include <Eigen/Geometry>
-#include <tf2_ros/transform_listener.h>
-#include <tf2_ros/buffer.h>
-#include <visualization_msgs/msg/interactive_marker_update.hpp>
-#include <mutex>
-// #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
->>>>>>> origin/master
 
 namespace crx_kinematics
 {
@@ -157,7 +147,6 @@ class CRXKinematicsPlugin : public kinematics::KinematicsBase
   private:
     std::vector<std::string> joint_names_;
     std::vector<std::string> link_names_;
-<<<<<<< HEAD
     crx_kinematics::CRXRobot robot_;
     std::array<double, 6> joint_limits_min_;
     std::array<double, 6> joint_limits_max_;
@@ -212,20 +201,6 @@ class CRXKinematicsPlugin : public kinematics::KinematicsBase
     bool respects_joint_limits(const std::vector<double>& solution) const;
     bool reproduces_desired_pose(const std::vector<double>& solution,
                                  const Eigen::Isometry3d& desired_pose) const;
-=======
-    std::string planning_frame_;
-    std::string robot_base_frame_;
-
-    Eigen::Isometry3d tip_offset_ = Eigen::Isometry3d::Identity();
-    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
-    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
-
-    // For debugging marker discrepancies
-    rclcpp::Subscription<visualization_msgs::msg::InteractiveMarkerUpdate>::SharedPtr marker_subscriber_;
-    geometry_msgs::msg::Pose latest_marker_pose_;
-    mutable std::mutex marker_pose_mutex_;
-    void markerUpdateCallback(const visualization_msgs::msg::InteractiveMarkerUpdate::SharedPtr msg);
->>>>>>> origin/master
 };
 
 }  // namespace crx_kinematics
