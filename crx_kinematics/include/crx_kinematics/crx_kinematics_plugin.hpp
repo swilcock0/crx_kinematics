@@ -52,8 +52,8 @@ class CRXKinematicsPlugin : public kinematics::KinematicsBase
 
     /**
      * @brief Yoshikawa manipulability index, sqrt(det(J * J^T)), evaluated at the TCP.
-     * Zero at a singularity. Accounts for any configured flange extension, since a longer
-     * tool changes the translational part of the Jacobian.
+     * Zero at a singularity. For a non-redundant 6x6 Jacobian this equals |det(J)|, which is
+     * invariant to shifting the Jacobian reference point along the tool.
      */
     double manipulability(const std::vector<double>& joint_values) const;
 

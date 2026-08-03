@@ -296,9 +296,9 @@ TEST(CrxKinematicsPluginTest, manipulability_is_well_formed)
     }
 }
 
-// Guards against the Jacobian reference point being left at the tip link origin, which would make
-// the metric blind to the tool and silently wrong for any extended flange.
-TEST(CrxKinematicsPluginTest, manipulability_accounts_for_the_flange_extension)
+// For a non-redundant 6x6 Jacobian, Yoshikawa's index (|det(J)|) is invariant to moving the
+// reference point along the tool. The plugin should preserve that property.
+TEST(CrxKinematicsPluginTest, manipulability_is_invariant_to_flange_extension)
 {
     const auto plain = make_plugin("crx10ia", "flange");
     const auto extended = make_plugin(
@@ -308,8 +308,7 @@ TEST(CrxKinematicsPluginTest, manipulability_accounts_for_the_flange_extension)
 
     const std::vector<double> joint_values = { 0.3, -0.4, 0.6, 0.5, 0.9, -0.2 };
 
-    ASSERT_GT(std::abs(plain.manipulability(joint_values) - extended.manipulability(joint_values)),
-              1e-9);
+    ASSERT_NEAR(plain.manipulability(joint_values), extended.manipulability(joint_values), 1e-9);
 }
 
 TEST(CrxKinematicsPluginTest, manipulability_selection_still_returns_valid_solutions)
