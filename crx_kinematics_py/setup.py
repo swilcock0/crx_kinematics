@@ -15,7 +15,7 @@ setup(
         (f"share/{package_name}/config", glob("config/*")),
         (f"share/{package_name}/meshes/crx10ia/visual", glob("meshes/crx10ia/visual/*")),
     ],
-    install_requires=["setuptools"],
+    install_requires=["setuptools", "tf-transformations"],
     zip_safe=True,
     maintainer="Daniel",
     maintainer_email="cranston.daniel@gmail.com",

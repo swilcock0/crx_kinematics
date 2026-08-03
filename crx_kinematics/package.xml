@@ -10,7 +10,11 @@
   <depend>eigen</depend>
   <depend>moveit_core</depend>
   <depend>pluginlib</depend>
+<<<<<<< HEAD
   <depend>tf2_eigen</depend>
+=======
+  <depend>tf2_kdl</depend>
+>>>>>>> origin/master
 
   <buildtool_depend>ament_cmake_ros</buildtool_depend>
 
