@@ -560,9 +560,13 @@ bool CRXKinematicsPlugin::extract_joint_limits_and_tcp_orientation()
         Eigen::AngleAxisd(-M_PI / 2, Eigen::Vector3d::UnitY()) *
         Eigen::AngleAxisd(M_PI, Eigen::Vector3d::UnitX());
 
-    // Figure out what the tip orientation is for the URDF / planning group in use
+    // Figure out what the tip orientation is for the URDF / planning group in use.
+    // setVariablePositions reads getVariableCount() doubles, which is the whole robot model,
+    // not just this group's 6 joints - a model carrying a gripper (or any extra joint) has
+    // more. Size the vector to the model or it reads past the end (assert in a debug build,
+    // silent garbage in a release one).
     auto all_zero_state = moveit::core::RobotState(robot_model_);
-    all_zero_state.setVariablePositions({ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 });
+    all_zero_state.setVariablePositions(std::vector<double>(robot_model_->getVariableCount(), 0.0));
     const auto rostool_orientation =
         Eigen::Quaterniond(all_zero_state.getGlobalLinkTransform(getTipFrame()).linear());
 
