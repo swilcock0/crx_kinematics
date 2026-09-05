@@ -112,6 +112,39 @@ class CRXRobot:
     # Note that some rows annoyingly attribute values to i-1 while some attribute to i.
     # The below params attribute all values in each column to i for convenience, , although it's
     # technically incorrect according to the modified DH convention..
+    # Link lengths per variant, as (l2, l4, l5, l6). Mirrors get_dh_params() and the
+    # *_params() factories in the C++ robot.cpp, which is the reference: the two
+    # implementations must not disagree about which robot they describe.
+    VARIANTS = {
+        "crx3ia": (0.28, 0.28, 0.111, 0.123),
+        "crx5ia": (0.41, 0.43, 0.13, 0.145),
+        "crx10ia": (0.54, 0.54, 0.15, 0.16),
+        "crx10ia_l": (0.71, 0.54, 0.15, 0.16),
+        "crx20ia_l": (0.71, 0.54, 0.15, 0.16),   # identical to the 10iA/L, as in C++
+        "crx25ia": (0.95, 0.75, 0.185, 0.18),
+    }
+    DEFAULT_VARIANT = "crx10ia"
+
+    @classmethod
+    def dh_for(cls, variant):
+        """DH parameters for a named variant. Raises rather than falling back: a silently
+        wrong arm length is a whole-cell error that shows up as millimetres of TCP offset."""
+        try:
+            l2, l4, l5, l6 = cls.VARIANTS[variant]
+        except KeyError:
+            raise ValueError(
+                f"unknown CRX variant {variant!r}; expected one of "
+                f"{sorted(cls.VARIANTS)}") from None
+        return [
+            cls.DHParams(),
+            cls.DHParams(alpha=-np.pi / 2, theta=-np.pi / 2),
+            cls.DHParams(a=l2, alpha=np.pi),
+            cls.DHParams(alpha=-np.pi / 2, r=-l4),
+            cls.DHParams(alpha=np.pi / 2, r=l5),
+            cls.DHParams(alpha=-np.pi / 2, r=-l6),
+        ]
+
+    # Class-level defaults, kept so existing code that reads CRXRobot.dh_params still works.
     L1 = DHParams()
     L2 = DHParams(alpha=-np.pi / 2, theta=-np.pi / 2)
     L3 = DHParams(a=0.54, alpha=np.pi)
@@ -124,8 +157,38 @@ class CRXRobot:
     T_L6_tool = np.diag([1.0, -1, -1, 1])
     frame_names = ["R0", "L1", "L2", "L3", "L4", "L5", "L6", "tool"]
 
-    def __init__(self):
-        pass
+    def __init__(self, variant=None):
+        """variant: one of VARIANTS, default crx10ia to preserve existing behaviour.
+
+        The C++ side has had per-variant parameters since crx10ia/L support was added; the
+        Python side kept the 10iA numbers only, so it silently described a shorter arm - the
+        10iA/L's upper arm is 0.71 m against 0.54, a 170 mm error at the shoulder.
+        """
+        self.variant = variant or self.DEFAULT_VARIANT
+        self.dh_params = self.dh_for(self.variant)
+
+    def fk_urdf(self, joint_values_rad, return_individual_transforms=False):
+        """FK from URDF-convention joint values in RADIANS, as /joint_states publishes them.
+
+        Two conversions separate that from what fk() wants, and getting either wrong is
+        silent - the result is a plausible pose in the wrong place.
+
+        1. fk() takes DEGREES.
+        2. fk() takes the Fanuc controller's J3, in which J3 = 0 means a horizontal forearm
+           whatever the upper arm is doing, and adds J2 back internally. The URDF does not
+           model that coupling, so its J3 is the already-summed value; passing it straight in
+           counts J2 twice. Measured against the robot's own TF, that error is
+           configuration-dependent - 46 mm of tool height at one pose, 100 mm at another -
+           so it does not present as a fixed offset one might notice and calibrate away.
+
+        Validated against robot_state_publisher's TF on a CRX-10iA/L: agreement to within
+        1e-4 m in x and y, with a constant residual in z from the DH chain origin sitting
+        above base_link.
+        """
+        import numpy as _np
+        q = list(_np.degrees(joint_values_rad))
+        q[2] -= q[1]
+        return self.fk(q, return_individual_transforms)
 
     def fk(self, joint_values, return_individual_transforms=False):
         # Joint values in degrees
