@@ -53,7 +53,13 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
   function(add_unit_test TEST_NAME)
-    ament_add_gtest(${TEST_NAME} test/${TEST_NAME}.cpp)
+    # ament_add_gtest defaults to a 60 s budget. test_crx_kinematics_plugin needs ~91 s:
+    # it loads a full robot model per CRX variant (crx5ia, crx10ia, crx30ia, crx10ia_l)
+    # and several cases sweep thousands of IK round trips. At the default, ctest kills it
+    # part way through and it produces no result file at all, so the whole package reports
+    # a failure while every test that managed to run passed. Note that passing --timeout
+    # to ctest does NOT override this - the per-test property set here wins.
+    ament_add_gtest(${TEST_NAME} test/${TEST_NAME}.cpp TIMEOUT 300)
     target_include_directories(${TEST_NAME} PRIVATE include)
     target_link_libraries(${TEST_NAME} robot crx_kinematics_plugin
                           moveit_core::moveit_test_utils tf2_eigen::tf2_eigen
