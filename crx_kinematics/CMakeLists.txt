@@ -23,6 +23,20 @@ target_include_directories(
                $<INSTALL_INTERFACE:include/${PROJECT_NAME}>)
 target_link_libraries(robot PUBLIC Eigen3::Eigen)
 target_compile_options(robot PRIVATE -Wall -Wextra -Wpedantic -Werror)
+# linked into the Python module below too
+set_target_properties(robot PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# Python bindings for the bare solver (src/python_bindings.cpp), when pybind11 is available.
+find_package(Python3 COMPONENTS Interpreter Development)
+find_package(pybind11 CONFIG QUIET)
+if(pybind11_FOUND AND Python3_FOUND)
+  pybind11_add_module(crx_kinematics_cpp src/python_bindings.cpp)
+  target_link_libraries(crx_kinematics_cpp PRIVATE robot)
+  install(TARGETS crx_kinematics_cpp
+          DESTINATION lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/site-packages)
+else()
+  message(STATUS "pybind11 not found: crx_kinematics_cpp (Python bindings) not built")
+endif()
 
 add_library(crx_kinematics_plugin SHARED src/crx_kinematics_plugin.cpp)
 target_include_directories(

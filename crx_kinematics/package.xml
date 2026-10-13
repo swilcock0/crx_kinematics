@@ -11,6 +11,7 @@
   <depend>moveit_core</depend>
   <depend>pluginlib</depend>
   <depend>tf2_eigen</depend>
+  <build_depend>pybind11-dev</build_depend>
 
   <buildtool_depend>ament_cmake_ros</buildtool_depend>
 
